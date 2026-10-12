@@ -1,7 +1,7 @@
 # rdms-backup — verified, scheduled mirror of a Mac folder to WebDAV (RUG RDMS)
 
-A small bash tool around [rclone](https://rclone.org) and launchd that keeps a copy of a local folder
-(by default `~/Documents`) on a WebDAV server — written for the University of Groningen's Research Data
+A small bash tool around [rclone](https://rclone.org) and launchd that keeps a copy of a local folder of your
+choice (e.g. `~/Documents`, or wherever your work lives; several folders = several configs) on a WebDAV server — written for the University of Groningen's Research Data
 Management System (`webdav.data.rug.nl`), usable with any WebDAV share.
 
 What it does beyond `rclone copy`:
@@ -21,7 +21,8 @@ What it does beyond `rclone copy`:
 * **Credentials in the login keychain**, never on disk. The generated `rclone.conf` contains no secret.
 * **Quota awareness** for servers that don't report quota: a tiny write test before each run, and a run that hits
   *507 Insufficient Storage* stops, tells you once, and pauses automatic runs for a day.
-* **Several targets**: a second config file (`backup.sh -c team …`) mirrors selected parts of the tree somewhere else.
+* **Any folder, several targets.** `LOCAL_DIR` is whatever you want backed up; a second config file
+  (`backup.sh -c <name> …`) backs up another folder, or selected parts of one, to another place.
 
 ## Requirements
 
@@ -31,8 +32,8 @@ macOS, Homebrew: `brew install rclone jq bash` (bash ≥ 4), optionally `termina
 ## Setup
 
 ```bash
-git clone https://github.com/mf-rug/rdms-backup ~/Documents/Code/backup && cd ~/Documents/Code/backup
-cp backup.conf.example backup.conf      # edit: WEBDAV_URL, WEBDAV_USER, REMOTE_PATH, schedule, …
+git clone https://github.com/mf-rug/rdms-backup ~/rdms-backup && cd ~/rdms-backup     # anywhere you like
+cp backup.conf.example backup.conf      # edit: LOCAL_DIR (the folder to back up), WEBDAV_URL, WEBDAV_USER, REMOTE_PATH, schedule, …
 ./backup.sh setup            # stores the WebDAV password in the login keychain, tests the connection (at the Mac, not over SSH)
 ./backup.sh probe            # cheap end-to-end test: list, timing estimate, upload/verify/delete of 3 test files
 ./backup.sh run --dry-run --full   # what the first run WOULD upload — nothing is written
@@ -40,7 +41,7 @@ cp backup.conf.example backup.conf      # edit: WEBDAV_URL, WEBDAV_USER, REMOTE_
 ./backup.sh install          # launchd agent; from now on it runs by itself
 ```
 
-`status` at any time:
+`status` at any time (example with `LOCAL_DIR=~/Documents`):
 
 ```
 Documents backup   /Users/you/Documents  →  rugdav:Mac_Backup/Documents
@@ -115,11 +116,13 @@ the guards. Time Machine cannot use WebDAV as a destination, and a sparse-bundle
 ./backup.sh rclone copyto 'rugdav:Mac_Backup/Documents_versions/2026-10-06_0307/Proposals/Proposal.docx' ~/Desktop/Proposal_old.docx
 ```
 
-## A second target (e.g. parts of the tree to a team drive)
+## More folders, or a second target (e.g. parts of a folder to a team drive)
 
-`backup-team.conf.example` → `backup-team.conf` points at another WebDAV folder and has its own state, logs, agent
-(offset wake-up minute) and versions. `FILTER_FILE` (`team-include.txt`, rclone filter rules: `+ /Papers/**` … `- **`)
-selects which parts go there; `exclude.txt` and `.nobackup` apply first. Everything works the same with `-c team`.
+Each config file is one backup job: its own `LOCAL_DIR`, destination, state, logs, launchd agent (give each a different
+`LAUNCHD_LABEL` and `TICK_MINUTE`) and versions folder; `backup.sh -c <name> …` uses `backup-<name>.conf`. So a second
+folder is a second config, and `backup-team.conf.example` shows the other use: the same folder, but only selected parts
+(`FILTER_FILE` = `team-include.txt`, rclone filter rules `+ /Papers/**` … `- **`; `exclude.txt` and `.nobackup` apply
+first) to another WebDAV location.
 
 ## Troubleshooting
 

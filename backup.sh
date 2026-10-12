@@ -46,8 +46,8 @@ if [[ "${1:-}" == "-c" && -n "${2:-}" ]]; then BACKUP_CONF="$SCRIPT_DIR/backup-$
 CONF="${BACKUP_CONF:-$SCRIPT_DIR/backup.conf}"
 
 # ----------------------------------------------------------------------------- defaults (see backup.conf)
-BACKUP_NAME="Documents backup"           # shown in notifications and status
-LOCAL_DIR="$HOME/Documents"
+BACKUP_NAME=""                           # shown in notifications and status; default: "<folder name> backup"
+LOCAL_DIR="$HOME/Documents"              # any folder; one config per folder if you need several (backup.sh -c <name>)
 FILTER_FILE=""                           # optional rclone --filter-from file: which parts of LOCAL_DIR this target covers
 WEBDAV_URL=""; WEBDAV_USER=""; WEBDAV_VENDOR="other"
 REMOTE_NAME="rugdav"; REMOTE_PATH=""
@@ -68,6 +68,7 @@ LAUNCHD_LABEL="nl.rug.rdms-backup"; TICK_MINUTE=7; BASH_BIN="/opt/homebrew/bin/b
 # shellcheck disable=SC1090
 source "$CONF"
 
+[[ -n "$BACKUP_NAME" ]] || BACKUP_NAME="$(basename "$LOCAL_DIR") backup"
 REMOTE="${REMOTE_OVERRIDE:-$REMOTE_NAME:$REMOTE_PATH}"
 [[ -n "$VERSIONS_PATH" ]] || VERSIONS_PATH="${REMOTE_PATH}_versions"
 if [[ -n "$REMOTE_OVERRIDE" ]]; then VERSIONS_REMOTE="${REMOTE_OVERRIDE%/}_versions"; else VERSIONS_REMOTE="$REMOTE_NAME:$VERSIONS_PATH"; fi
