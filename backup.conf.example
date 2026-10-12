@@ -2,11 +2,12 @@
 # Copy this file to backup.conf and fill in the <placeholders>.
 
 # ---- what and where -------------------------------------------------------------------------
-LOCAL_DIR="$HOME/Documents"
+LOCAL_DIR="$HOME/Documents"              # the folder to back up — any folder you like (one config per folder, see README)
+# BACKUP_NAME="Documents backup"         # name in notifications/status; default "<folder name> backup"
 WEBDAV_URL="https://webdav.data.rug.nl/<your.name>@rug.nl"   # server + your home collection
 WEBDAV_USER="<your.name>@rug.nl"
 WEBDAV_VENDOR="other"                    # rclone webdav vendor; "other" = generic WebDAV (Apache)
-REMOTE_PATH="Mac_Backup/Documents"       # folder below WEBDAV_URL that mirrors LOCAL_DIR
+REMOTE_PATH="Mac_Backup/Documents"       # folder below WEBDAV_URL that mirrors LOCAL_DIR (name it after the folder)
 REMOTE_NAME="rugdav"                     # rclone remote name → the remote is "rugdav:MF_Mac_Backup/Documents"
 
 # ---- credentials: read at run time from the login keychain, never written to disk -------------
