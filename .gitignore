@@ -1,0 +1,8 @@
+# account-specific configuration (contains your e-mail / server / folder names)
+backup.conf
+backup-*.conf
+!*.example
+team-include.txt
+# the retired previous mechanism and lab notes
+old/
+.DS_Store

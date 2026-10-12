@@ -1,0 +1,55 @@
+# backup.conf — settings for backup.sh (sourced by bash; $HOME and $SCRIPT_DIR may be used)
+# Copy this file to backup.conf and fill in the <placeholders>.
+
+# ---- what and where -------------------------------------------------------------------------
+LOCAL_DIR="$HOME/Documents"
+WEBDAV_URL="https://webdav.data.rug.nl/<your.name>@rug.nl"   # server + your home collection
+WEBDAV_USER="<your.name>@rug.nl"
+WEBDAV_VENDOR="other"                    # rclone webdav vendor; "other" = generic WebDAV (Apache)
+REMOTE_PATH="Mac_Backup/Documents"       # folder below WEBDAV_URL that mirrors LOCAL_DIR
+REMOTE_NAME="rugdav"                     # rclone remote name → the remote is "rugdav:MF_Mac_Backup/Documents"
+
+# ---- credentials: read at run time from the login keychain, never written to disk -------------
+KEYCHAIN_SERVICE="rugbackup"                    # generic item created by `backup.sh setup`
+KEYCHAIN_FALLBACK_SERVER="webdav.data.rug.nl"   # Cyberduck's existing internet-password item, used if the above is missing
+
+# ---- versions (protection against overwritten / corrupted files) -------------------------------
+VERSIONS_KEEP_DAYS=90      # before a remote file is replaced it is moved (server-side, free) into
+VERSIONS_PATH=""           # <REMOTE_PATH>_versions/<run stamp>/…; snapshots older than this are pruned. 0 = off
+
+# ---- exclusions -------------------------------------------------------------------------------
+EXCLUDE_FILE="$SCRIPT_DIR/exclude.txt"   # rclone filter patterns, one per line
+NOBACKUP_MARKER=".nobackup"              # any folder containing an (empty) file of this name is skipped
+VENV_MARKER="pyvenv.cfg"                 # every Python virtualenv has this file at its root → the whole venv is skipped
+
+# ---- schedule (launchd wakes the script hourly; the script decides whether a run is due) -------
+RUN_HOUR=3                 # main slot (local hour): weekly full pass + the daily success notification; missed runs catch up
+RUN_HOURS="11 15 19"       # additional run slots (local hours) — quick incremental runs, silent unless something is wrong
+FULL_EVERY_DAYS=7          # compare + verify the whole tree at least this often (other days: only changed files)
+RETRY_AFTER_HOURS=3        # after a failed run, retry this many hours later …
+MAX_RETRIES=2              # … at most this many times before the next scheduled run
+STALE_AFTER_HOURS=48       # warn when the last successful backup is older than this
+INCREMENTAL_MAX_FILES=50000   # more changed files than this → do a full run instead (cheaper)
+
+# ---- feedback ---------------------------------------------------------------------------------
+NOTIFY=true
+NOTIFY_ON_SUCCESS=daily    # true = after every good run, daily = only after the RUN_HOUR run, false = never (failures always notify)
+FAILURE_DIALOG=true        # additionally a dialog box (System Events) on failure / warning / staleness
+
+# ---- rclone tuning ----------------------------------------------------------------------------
+RCLONE_TRANSFERS=16        # parallel uploads (server commits ~1 file/s per connection; 16 measured 3x faster than 4)
+RCLONE_CHECKERS=16         # parallel directory listings / comparisons
+RCLONE_MAX_RUNTIME="10h"   # hard stop for a single rclone pass (the next run continues where it stopped)
+COMPARE_MODE="update"      # update: re-upload when the local file is newer than the remote copy (catches same-size edits)
+                           # size:   compare by size only (WebDAV without checksums cannot do better)
+RCLONE_EXTRA=()            # extra rclone flags, e.g. (--bwlimit 20M) or (--max-size 5G)
+
+# ---- runtime files ----------------------------------------------------------------------------
+STATE_DIR="$HOME/Library/Application Support/rugbackup"   # state.json, runs.jsonl, rclone.conf (no secrets)
+LOG_DIR="$HOME/Library/Logs/rugbackup"                    # one folder per run + launchd.log
+LOG_KEEP_DAYS=90
+
+# ---- launchd ----------------------------------------------------------------------------------
+LAUNCHD_LABEL="nl.rug.rdms-backup"
+TICK_MINUTE=7              # hourly wake-up at hh:07
+BASH_BIN="/opt/homebrew/bin/bash"

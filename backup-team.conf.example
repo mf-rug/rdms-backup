@@ -1,0 +1,24 @@
+# backup-team.conf — second target: parts of ~/Documents → your personal folder on a team drive.
+# Copy to backup-team.conf, fill in the <placeholders>, then:  backup.sh -c team …
+#   backup.sh -c team status | run --dry-run | run | install | …     (everything backup.sh can do)
+# Only the lines that differ from backup.conf are needed; everything else keeps the defaults from backup.sh.
+
+BACKUP_NAME="Team-drive backup"
+LOCAL_DIR="$HOME/Documents"
+FILTER_FILE="$SCRIPT_DIR/team-include.txt"        # WHICH PARTS go to the team drive — edit that file
+WEBDAV_URL="https://webdav.data.rug.nl/<team>"   # the team drive (= /rug/home/<team>)
+WEBDAV_USER="<your.name>@rug.nl"
+REMOTE_PATH="<you>/Documents"                         # your personal folder on the drive
+REMOTE_NAME="rugteam"
+KEYCHAIN_SERVICE="rugbackup"                        # same account, same keychain item
+KEYCHAIN_FALLBACK_SERVER="webdav.data.rug.nl"
+EXCLUDE_FILE="$SCRIPT_DIR/exclude.txt"              # same junk exclusions as the main backup
+
+STATE_DIR="$HOME/Library/Application Support/rugbackup-team"
+LOG_DIR="$HOME/Library/Logs/rugbackup-team"
+LAUNCHD_LABEL="nl.rug.rdms-backup.team"
+TICK_MINUTE=37                                      # offset from the main job (:07) so the two never upload at the same time
+RUN_HOUR=3; RUN_HOURS="11 15 19"; FULL_EVERY_DAYS=7
+VERSIONS_KEEP_DAYS=90
+NOTIFY_ON_SUCCESS=daily; FAILURE_DIALOG=true
+RCLONE_TRANSFERS=16; RCLONE_CHECKERS=16
