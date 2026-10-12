@@ -1,0 +1,9 @@
+# team-include.txt — which parts of ~/Documents go to the team drive (rclone filter rules, evaluated top to bottom).
+#   + /Folder/**      include this top-level folder (and everything below)
+#   - /Folder/Sub/**  exclude a part of it (put exclusions BEFORE the include that would match them)
+#   - **              last line: everything not included above stays out
+# exclude.txt (junk, venvs, caches) is applied before these rules, .nobackup markers still work.
+# Test the selection without uploading:   backup.sh -c team run --dry-run --full
+
+
+- **

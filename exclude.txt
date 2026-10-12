@@ -1,0 +1,41 @@
+# rclone filter patterns for backup.sh (--exclude-from). One glob per line.
+#   pattern without leading "/"  → matches at any depth      trailing "/" → directories only
+#   "*" does not cross "/", "**" does.   Docs: https://rclone.org/filtering/
+# To skip one specific folder, drop an empty file named .nobackup into it instead (see NOBACKUP_MARKER).
+
+# macOS metadata and system folders
+.DS_Store
+._*
+.Spotlight-V100/
+.Trashes/
+.Trash/
+.fseventsd/
+.TemporaryItems/
+.DocumentRevisions-V100/
+.AppleDouble/
+
+# Office / editor lock files and half-written downloads
+~$*
+.~lock.*#
+*.swp
+*.swo
+*.crdownload
+*.part
+
+# Rebuildable development artefacts: virtual environments, caches, dependency trees
+# (any folder containing a pyvenv.cfg file is skipped too — see NOBACKUP_MARKER / VENV_MARKER in backup.conf)
+.venv/
+venv/
+site-packages/
+dist-packages/
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.tox/
+.eggs/
+*.egg-info/
+.cache/
