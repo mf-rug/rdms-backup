@@ -51,8 +51,11 @@ in Git Bash; `bash backup.sh …` works too). The Windows-specific parts:
 * **Locked files**: a file that another program holds open exclusively (e.g. an Outlook .pst) is reported as
   "in use" and picked up by a later run. It does not make the run fail.
 * **Paths**: the script turns off Git Bash's automatic path rewriting for native programs (`MSYS2_ARG_CONV_EXCL='*'`)
-  and passes all paths to rclone in `C:/…` form. Write paths in the config either way (`$HOME/Documents`,
+  and passes all paths to rclone in `C:/…` form. Write paths in the config either way (`$USERPROFILE/Documents`,
   `/c/Users/<you>/…`, `C:/Users/<you>/…`). If you call `backup.sh rclone …` yourself, write local paths as `C:/…`.
+* **HOME is not your profile** on managed machines: Git Bash takes HOME from HOMEDRIVE, which can be the network home
+  drive (e.g. `X:`). Use `$USERPROFILE/…` in the config (the Windows default for `LOCAL_DIR` is `$USERPROFILE/Documents`),
+  and `cd` to the repo by its full path (`cd /c/Users/<you>/rdms-backup`).
 * **OneDrive**: if Documents is redirected into OneDrive (Files On-Demand), rclone would download every cloud-only
   file. Back up a genuinely local folder instead.
 * Use a machine-specific `REMOTE_PATH` (e.g. `Win_Backup/Documents`) when another machine already backs up with the same account.
