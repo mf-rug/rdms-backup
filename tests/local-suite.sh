@@ -24,7 +24,7 @@ latest_log() { cat "$LOGS/latest/run.log"; }
 
 mkdir -p "$SRC/Papers/sub" "$SRC/venv-proj" "$SRC/skipme" "$DST"
 printf 'alpha\n' > "$SRC/a.txt"; printf 'paper one\n' > "$SRC/Papers/p1.txt"; printf 'deep\n' > "$SRC/Papers/sub/deep.txt"
-printf 'umlaut\n' > "$SRC/Papers/Fürst ü & co.txt"
+printf 'umlaut\n' > "$SRC/Papers/Größe ü & co.txt"
 : > "$SRC/venv-proj/pyvenv.cfg"; printf 'x\n' > "$SRC/venv-proj/lib.py"
 : > "$SRC/skipme/.nobackup"; printf 'secret\n' > "$SRC/skipme/no.txt"
 printf 'junk\n' > "$SRC/.DS_Store"
@@ -50,7 +50,7 @@ bk run >/dev/null 2>&1
 check "result ok"                    [ "$(last result)" = ok ]
 check "mode full"                    [ "$(last mode)" = full ]
 check "files uploaded"               [ -f "$DST/a.txt" ] && [ -f "$DST/Papers/sub/deep.txt" ]
-check "non-ASCII name uploaded"      [ -f "$DST/Papers/Fürst ü & co.txt" ]
+check "non-ASCII name uploaded"      [ -f "$DST/Papers/Größe ü & co.txt" ]
 check "venv skipped (pyvenv.cfg)"    [ ! -e "$DST/venv-proj" ]
 check ".nobackup folder skipped"     [ ! -e "$DST/skipme" ]
 check "exclude.txt applied"          [ ! -e "$DST/.DS_Store" ]

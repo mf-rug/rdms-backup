@@ -100,7 +100,8 @@ fi
 REMOTE="${REMOTE_OVERRIDE:-$REMOTE_NAME:$REMOTE_PATH}"
 [[ -n "$VERSIONS_PATH" ]] || VERSIONS_PATH="${REMOTE_PATH}_versions"
 if [[ -n "$REMOTE_OVERRIDE" ]]; then VERSIONS_REMOTE="${REMOTE_OVERRIDE%/}_versions"; else VERSIONS_REMOTE="$REMOTE_NAME:$VERSIONS_PATH"; fi
-if [[ "$REMOTE" == *:* && ! "$REMOTE" =~ ^[A-Za-z]:/ ]]; then REMOTE_ROOT="${REMOTE%%:*}:"; else REMOTE_ROOT="$REMOTE"; fi   # C:/… is a local path
+# Windows: C:/… is a local drive path, not remote "C:" (so a one-letter remote name cannot be used there; rclone has the same rule)
+if [[ "$REMOTE" == *:* ]] && ! [[ "$OS" == windows && "$REMOTE" =~ ^[A-Za-z]:/ ]]; then REMOTE_ROOT="${REMOTE%%:*}:"; else REMOTE_ROOT="$REMOTE"; fi
 STATE_FILE="$STATE_DIR/state.json"; RUNS_FILE="$STATE_DIR/runs.jsonl"
 LOCK_DIR="$STATE_DIR/lock"; RCLONE_CONF="$STATE_DIR/rclone.conf"; CRED_FILE="$STATE_DIR/webdav.cred"
 if [[ "$OS" == windows ]]; then
@@ -369,7 +370,10 @@ BUSY_COUNT=0
 split_busy() {   # split_busy <tag>: files that changed locally while this run was going are "in use", not failures
   local f="$RUN_DIR/check-$1-differ.txt" b="$RUN_DIR/check-$1-busy.txt" keep="$RUN_DIR/check-$1-differ.real.txt" rel m n
   : > "$b"; : > "$keep"
-  if [[ -s "$RUN_DIR/locked.txt" ]]; then   # Windows: locked files were already reported as in use by split_locked
+  # Windows only: locked.txt is written by split_locked (never on macOS). Those files were already reported and counted
+  # in BUSY_COUNT there; here they only leave the missing/differ lists so that fix and verdict ignore them.
+  # Without a non-empty locked.txt this block does nothing, so counts and exit codes are exactly as before.
+  if [[ -s "$RUN_DIR/locked.txt" ]]; then
     local l; for l in "$RUN_DIR/check-$1-missing.txt" "$f"; do [[ -f "$l" ]] && { grep -vxFf "$RUN_DIR/locked.txt" "$l" > "$l.tmp"; mv "$l.tmp" "$l"; }; done
     CK_MISSING=$(count_lines "$RUN_DIR/check-$1-missing.txt"); CK_DIFFER=$(count_lines "$f")
   fi
