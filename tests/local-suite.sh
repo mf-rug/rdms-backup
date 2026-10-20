@@ -159,6 +159,13 @@ if [[ "$OS" == windows ]]; then
   bk run --full >/dev/null 2>&1
   check "after release: uploaded"     [ -f "$DST/locked.txt" ] && [ "$(last result)" = ok ]
   check "latest is a junction (not a copy)" [ -L "$LOGS/latest" ]
+
+  echo "== 10. Windows: install / status / uninstall of the scheduled task (label …selftest)"
+  bk install >/dev/null 2>&1
+  check "task registered"            bash -c "MSYS2_ARG_CONV_EXCL='*' schtasks.exe /Query /TN nl.rug.rdms-backup.selftest >/dev/null 2>&1"
+  check "status says registered"     grep -q 'task registered' <<<"$(bk status 2>&1)"
+  bk uninstall >/dev/null 2>&1
+  check "task removed"               bash -c "! MSYS2_ARG_CONV_EXCL='*' schtasks.exe /Query /TN nl.rug.rdms-backup.selftest >/dev/null 2>&1"
 fi
 
 echo

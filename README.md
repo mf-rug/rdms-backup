@@ -28,6 +28,34 @@ What it does beyond `rclone copy`:
 
 macOS, Homebrew: `brew install rclone jq bash` (bash ≥ 4), optionally `terminal-notifier` for nicer notifications.
 `python3` (ships with the Xcode command-line tools) is used for Unicode-normalisation of file names.
+Windows: see [Windows](#windows) below.
+
+Tests: `bash tests/local-suite.sh` runs the whole cycle against a local dummy target (no server, no password).
+
+### Windows
+
+The same script runs under Git Bash ([Git for Windows](https://gitforwindows.org)):
+`winget install Git.Git Rclone.Rclone jqlang.jq Python.Python.3.12`. Setup is the same as below (run the commands
+in Git Bash; `bash backup.sh …` works too). The Windows-specific parts:
+
+* **Password**: `setup` stores it DPAPI-encrypted in `%LOCALAPPDATA%\rugbackup\state\webdav.cred`. Only the same
+  Windows user on the same machine can decrypt it, so a copied state folder needs `setup` again.
+  `diag-keychain` tests the decryption.
+* **Schedule**: `install` creates a Task Scheduler task named after `LAUNCHD_LABEL`. It wakes the script hourly at `:TICK_MINUTE`
+  and at logon, and catches up missed wake-ups. It runs *only while you are logged on*, because the notifications
+  need the desktop. Nothing runs while the machine sleeps or nobody is logged in. It starts `bash.exe` through
+  `conhost.exe --headless`, so no window appears. Check the task with `schtasks /Query /TN nl.rug.rdms-backup /V /FO LIST`;
+  its output goes to `%LOCALAPPDATA%\rugbackup\logs\task.log`. `gui-run` is not needed: it simply runs the command.
+* **State and logs**: `%LOCALAPPDATA%\rugbackup\state` and `…\logs`. `logs\latest` is a directory junction.
+* **Feedback**: Windows toast notifications; on failure a message box offers to open the log.
+* **Locked files**: a file that another program holds open exclusively (e.g. an Outlook .pst) is reported as
+  "in use" and picked up by a later run. It does not make the run fail.
+* **Paths**: the script turns off Git Bash's automatic path rewriting for native programs (`MSYS2_ARG_CONV_EXCL='*'`)
+  and passes all paths to rclone in `C:/…` form. Write paths in the config either way (`$HOME/Documents`,
+  `/c/Users/<you>/…`, `C:/Users/<you>/…`). If you call `backup.sh rclone …` yourself, write local paths as `C:/…`.
+* **OneDrive**: if Documents is redirected into OneDrive (Files On-Demand), rclone would download every cloud-only
+  file. Back up a genuinely local folder instead.
+* Use a machine-specific `REMOTE_PATH` (e.g. `Win_Backup/Documents`) when another machine already backs up with the same account.
 
 ## Setup
 
