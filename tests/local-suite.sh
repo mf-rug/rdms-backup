@@ -28,6 +28,8 @@ printf 'umlaut\n' > "$SRC/Papers/Größe ü & co.txt"
 : > "$SRC/venv-proj/pyvenv.cfg"; printf 'x\n' > "$SRC/venv-proj/lib.py"
 : > "$SRC/skipme/.nobackup"; printf 'secret\n' > "$SRC/skipme/no.txt"
 printf 'junk\n' > "$SRC/.DS_Store"
+# all source files older than any run start: split_busy treats files modified within 5 s before a run as "in use"
+find "$SRC" -type f -exec touch -t 202501010000 {} +
 cat > "$CONF" <<EOF
 LOCAL_DIR="$SRC"
 REMOTE_OVERRIDE="$DST"
@@ -95,6 +97,7 @@ bk check >/dev/null 2>&1; check "check exits 1 when a file is missing" [ $? -eq 
 bk run --full >/dev/null 2>&1
 out=$(bk versions a.txt 2>&1); check "versions lists a.txt snapshots" grep -q 'a.txt' <<<"$out"
 rm "$SRC/Papers/p1.txt"
+sleep 1   # run folders are named by start second; the orphans run must sort as the newest
 bk orphans >/dev/null 2>&1
 check "orphans: deleted file listed" grep -q 'Papers/p1.txt' "$LOGS/latest/orphans-gone.tsv"
 out=$(bk status 2>&1); check "status exits 0 and shows last success" grep -q 'last success' <<<"$out"
@@ -121,18 +124,28 @@ setstate '.last_result = "ok"'
 
 echo "== 7. lock: one run at a time"
 head -c 400000 /dev/urandom > "$SRC/big.bin"
+# deterministic: the lock is held by a live process (independent of how fast a real run is on this disk)
+sleep 60 & holder=$!
+mkdir -p "$STATE/lock"; echo "$holder" > "$STATE/lock/pid"
+n0=$(nruns)
+out=$(bk run 2>&1); ec=$?
+check "run refused while the lock holder lives (exit 2)" [ "$ec" -eq 2 ]
+check "refusal names the running pid" grep -q "already in progress (pid $holder)" <<<"$out"
+bk tick >/dev/null 2>&1; ec=$?
+check "tick while locked exits 0"    [ "$ec" -eq 0 ]
+check "tick while locked does not run" [ "$(nruns)" = "$n0" ]
+kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null; rm -rf "$STATE/lock"
+# a real concurrent run (slowed down), when the machine is slow enough to catch it
 printf 'RCLONE_EXTRA=(--bwlimit 40k)\n' >> "$CONF"
 bk run >/dev/null 2>&1 & bgpid=$!
-for _ in $(seq 1 40); do [[ -f "$STATE/lock/pid" ]] && break; sleep 0.5; done
-sleep 2
+for _ in $(seq 1 40); do [[ -f "$STATE/lock/pid" ]] && break; sleep 0.25; done
 out=$(bk run 2>&1); ec=$?
-check "second run refused (exit 2)"  [ "$ec" -eq 2 ] && grep -q 'already in progress' <<<"$out"
-n0=$(nruns)
-bk tick >/dev/null 2>&1; ec=$?
-check "tick during a run exits 0 without running" [ "$ec" -eq 0 ] && [ "$(nruns)" = "$n0" ]
+if kill -0 "$bgpid" 2>/dev/null; then
+  check "second real run refused (exit 2)" [ "$ec" -eq 2 ]
+else echo "  skip  second real run (the first finished too fast to overlap)"; fi
 wait "$bgpid"
 sed -i.bak '/--bwlimit/d' "$CONF"
-check "slow run finished ok"         [ "$(last result)" = ok ]
+check "slow run finished ok"         [ "$(tail -n 2 "$STATE/runs.jsonl" | jq -r .result | tr -d '\r' | grep -c ok)" -ge 1 ]
 check "lock released"                [ ! -e "$STATE/lock" ]
 mkdir -p "$STATE/lock"; echo 999999 > "$STATE/lock/pid"
 bk run >/dev/null 2>&1
