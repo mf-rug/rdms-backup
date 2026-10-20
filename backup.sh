@@ -64,6 +64,7 @@ CONF="${BACKUP_CONF:-$SCRIPT_DIR/backup.conf}"
 # ----------------------------------------------------------------------------- defaults (see backup.conf)
 BACKUP_NAME=""                           # shown in notifications and status; default: "<folder name> backup"
 LOCAL_DIR="$HOME/Documents"              # any folder; one config per folder if you need several (backup.sh -c <name>)
+[[ "$OS" == windows && -n "${USERPROFILE:-}" ]] && LOCAL_DIR="$USERPROFILE/Documents"   # Git Bash HOME may be a network drive (HOMEDRIVE)
 FILTER_FILE=""                           # optional rclone --filter-from file: which parts of LOCAL_DIR this target covers
 WEBDAV_URL=""; WEBDAV_USER=""; WEBDAV_VENDOR="other"
 REMOTE_NAME="rugdav"; REMOTE_PATH=""
@@ -918,7 +919,7 @@ cmd_probe() {   # cheap end-to-end test of the WebDAV server with rclone; safe: 
   local t0 t1 n d pw var tmp probe="$REMOTE/.rugbackup-probe"
   echo "== rugbackup probe  $(ts)  host=$HOST_SHORT  rclone $(rclone version | head -n 1 | cut -d' ' -f2)"
   echo "-- 1. keychain"
-  if setup_rclone; then echo "   password read from the login keychain: OK"; else echo "   FAIL: $KEYCHAIN_HINT"; return 1; fi
+  if setup_rclone; then echo "   password read from $( [[ "$OS" == windows ]] && echo "the DPAPI file" || echo "the login keychain"): OK"; else echo "   FAIL: $KEYCHAIN_HINT"; return 1; fi
   echo "-- 2. server (authenticated OPTIONS on $WEBDAV_URL/)"
   var="RCLONE_CONFIG_${REMOTE_NAME^^}_PASS"; pw=$(rclone reveal "${!var}")
   printf 'user = "%s:%s"\n' "$WEBDAV_USER" "$pw" | curl -s -o /dev/null -D - --max-time 30 -X OPTIONS -K - "$WEBDAV_URL/" | grep -iE '^(HTTP|server|dav|allow|x-powered)' | sed 's/^/   /'
