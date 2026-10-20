@@ -179,7 +179,7 @@ cloud_root_of() {   # cloud_root_of <path> → prints the sync root (or the path
   for v in OneDrive OneDriveCommercial OneDriveConsumer; do          # set by the OneDrive client (Windows)
     r=${!v:-}; [[ -n "$r" ]] || continue
     lr=$(wpath "$r" | tr '[:upper:]' '[:lower:]'); lr=${lr//\\//}; lr=${lr%/}
-    [[ "$lp" == "$lr" || "$lp" == "$lr"/* ]] && { printf '%s\n' "$r"; return 0; }
+    [[ "$lp" == "$lr" || "$lp" == "$lr"/* ]] && { wpath "$r"; echo; return 0; }   # printed in the same C:/ form as the other paths
   done
   case "$lp" in
     */onedrive*|*/library/cloudstorage/*|*/library/mobile\ documents/*|*/dropbox|*/dropbox/*|*/google\ drive*|*/googledrive*) printf '%s\n' "$p"; return 0 ;;
