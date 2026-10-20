@@ -51,7 +51,7 @@ fi
 export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
 
 if (( BASH_VERSINFO[0] < 4 )); then
-  if [[ "$OS" == mac ]]; then echo "backup.sh needs bash >= 4; this is $BASH_VERSION. Run it as: /opt/homebrew/bin/bash backup.sh … (or: brew install bash)" >&2
+  if [[ "$OS" == mac ]]; then echo "backup.sh needs bash >= 4; this is $BASH_VERSION. Install Homebrew's bash (brew install bash) and run it with that bash, e.g. /opt/homebrew/bin/bash backup.sh … (Intel Macs: /usr/local/bin/bash)" >&2
   else echo "backup.sh needs bash >= 4; this is $BASH_VERSION" >&2; fi
   exit 2
 fi
@@ -84,7 +84,9 @@ NOTIFY=true; NOTIFY_ON_SUCCESS=true; FAILURE_DIALOG=true
 RCLONE_TRANSFERS=4; RCLONE_CHECKERS=8; RCLONE_MAX_RUNTIME="10h"; COMPARE_MODE="update"
 RCLONE_EXTRA=()
 LAUNCHD_LABEL="nl.rug.rdms-backup"; TICK_MINUTE=7         # on Windows LAUNCHD_LABEL names the scheduled task
-if [[ "$OS" == windows ]]; then BASH_BIN="$(cygpath -m /usr/bin/bash.exe)"; else BASH_BIN="/opt/homebrew/bin/bash"; fi
+if [[ "$OS" == windows ]]; then BASH_BIN="$(cygpath -m /usr/bin/bash.exe)"
+elif [[ "$BASH" == /* && -x "$BASH" ]]; then BASH_BIN="$BASH"       # the bash (>= 4) running this script: Homebrew's, /opt/homebrew (Apple Silicon) or /usr/local (Intel)
+elif [[ -x /usr/local/bin/bash ]]; then BASH_BIN="/usr/local/bin/bash"; else BASH_BIN="/opt/homebrew/bin/bash"; fi
 
 [[ -f "$CONF" ]] || { echo "config not found: $CONF" >&2; exit 2; }
 # shellcheck disable=SC1090
@@ -167,6 +169,39 @@ else
   if have gtimeout; then TIMEOUT_BIN=gtimeout; else TIMEOUT_BIN=""; fi
 fi
 HOST_SHORT=${HOSTNAME%%.*}
+
+# ----------------------------------------------------------------------------- cloud-synced folders (OneDrive, iCloud Drive, …)
+# A folder that a cloud client already syncs gains little from this backup, and its "online-only" placeholder files
+# would be downloaded by every run. probe and status warn; nothing is blocked.
+cloud_root_of() {   # cloud_root_of <path> → prints the sync root (or the path itself for a name match); exit 1 if none
+  local p=$1 lp v r lr
+  lp=$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]')
+  for v in OneDrive OneDriveCommercial OneDriveConsumer; do          # set by the OneDrive client (Windows)
+    r=${!v:-}; [[ -n "$r" ]] || continue
+    lr=$(wpath "$r" | tr '[:upper:]' '[:lower:]'); lr=${lr//\\//}; lr=${lr%/}
+    [[ "$lp" == "$lr" || "$lp" == "$lr"/* ]] && { printf '%s\n' "$r"; return 0; }
+  done
+  case "$lp" in
+    */onedrive*|*/library/cloudstorage/*|*/library/mobile\ documents/*|*/dropbox|*/dropbox/*|*/google\ drive*|*/googledrive*) printf '%s\n' "$p"; return 0 ;;
+  esac
+  return 1
+}
+cloud_only_count() {   # cloud_only_count <dir> <seconds> → "N", "N+" (scan hit the time cap) or "?": placeholder files whose content is only in the cloud
+  local d=$1 cap=$2 out ec n; out=$(mktemp)
+  if [[ "$OS" == windows ]]; then
+    # FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS (0x400000, Files On-Demand) or OFFLINE (0x1000)
+    # shellcheck disable=SC2016   # PowerShell code: $ is PowerShell's
+    BK_DIR="$(cygpath -w "$d")" tmo "$cap" powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \
+      '$n=0; Get-ChildItem -LiteralPath $env:BK_DIR -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { if ($_.Attributes -band 0x401000) { $n++ } }; $n' >"$out" 2>/dev/null </dev/null; ec=$?
+    n=$(tr -d '\r[:space:]' < "$out"); if (( ec == 124 )) || [[ -z "$n" ]]; then n="?"; fi
+  else
+    local -a flags=(-name '.*.icloud')   # iCloud Drive placeholders; plus APFS "dataless" files (File Provider: OneDrive, Dropbox, Google Drive …)
+    /usr/bin/find /dev/null -flags +dataless >/dev/null 2>&1 && flags=(-flags +dataless -o -name '.*.icloud')
+    tmo "$cap" /usr/bin/find "$d" -type f \( "${flags[@]}" \) >"$out" 2>/dev/null; ec=$?
+    n=$(grep -c . "$out" || true); (( ec == 124 )) && n="$n+"
+  fi
+  rm -f "$out"; printf '%s\n' "$n"
+}
 
 RUN_DIR=""; RUN_LOG=""
 log() {
@@ -679,6 +714,7 @@ cmd_status() {
   la=$(state_get last_attempt_epoch 0); lr=$(state_get last_result none); ls=$(state_get last_success_epoch 0); lf=$(state_get last_full_success_epoch 0); lc=$(state_get last_check_epoch 0)
   echo "$BACKUP_NAME   $LOCAL_DIR  →  $REMOTE$( [[ -n "$FILTER_FILE" ]] && echo "   (parts: $(grep -cE '^\+' "$FILTER_FILE") include rule(s) in $(basename "$FILTER_FILE"))")"
   echo "  agent:            $agent$( [[ "$(state_get paused 0)" == 1 ]] && echo '  [PAUSED — backup.sh resume]')"
+  local croot; if croot=$(cloud_root_of "$LOCAL_DIR"); then echo "  ⚠ CLOUD FOLDER:   inside a cloud-synced folder ($croot): cloud-only files would be downloaded by every run — backup.sh probe counts them; see README"; fi
   lock_running && echo "  running now:      yes (pid $(lock_pid)) — tail -f '$LOG_DIR/latest/run.log'"
   echo "  last attempt:     $(fmt_epoch "$la")  ${lr^^}  $(state_get last_mode -)  $(fmt_dur "$(state_get last_duration 0)")  $(state_get last_transfers 0) files / $(fmt_bytes "$(state_get last_bytes 0)")"
   [[ "$lr" != ok && "$lr" != none ]] && echo "                    $(state_get last_message -)"
@@ -918,6 +954,16 @@ cmd_probe() {   # cheap end-to-end test of the WebDAV server with rclone; safe: 
   require rclone jq curl; state_init
   local t0 t1 n d pw var tmp probe="$REMOTE/.rugbackup-probe"
   echo "== rugbackup probe  $(ts)  host=$HOST_SHORT  rclone $(rclone version | head -n 1 | cut -d' ' -f2)"
+  echo "-- 0. local folder  ($LOCAL_DIR)"
+  local croot cnt
+  if croot=$(cloud_root_of "$LOCAL_DIR"); then echo "   ⚠ inside a cloud-synced folder ($croot): prefer a folder that exists only on this computer (README: cloud-synced folders)"
+  else echo "   not inside a known cloud-synced folder (OneDrive, iCloud Drive, CloudStorage, Dropbox, Google Drive)"; fi
+  cnt=$(cloud_only_count "$LOCAL_DIR" 30)
+  case "$cnt" in
+    0)  echo "   cloud-only placeholder files: 0" ;;
+    \?) echo "   cloud-only placeholder files: unknown (scan did not finish within 30 s)" ;;
+    *)  echo "   ⚠ cloud-only placeholder files (content not on this disk): $cnt — every run would download them; exclude them or pick another folder" ;;
+  esac
   echo "-- 1. keychain"
   if setup_rclone; then echo "   password read from $( [[ "$OS" == windows ]] && echo "the DPAPI file" || echo "the login keychain"): OK"; else echo "   FAIL: $KEYCHAIN_HINT"; return 1; fi
   echo "-- 2. server (authenticated OPTIONS on $WEBDAV_URL/)"

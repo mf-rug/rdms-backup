@@ -59,4 +59,4 @@ LOG_KEEP_DAYS=90
 # ---- scheduler: launchd agent (macOS) / Task Scheduler task (Windows) ---------------------------
 LAUNCHD_LABEL="nl.rug.rdms-backup"   # launchd label, or the scheduled task's name on Windows
 TICK_MINUTE=7              # hourly wake-up at hh:07
-# BASH_BIN="/opt/homebrew/bin/bash"   # default; on Windows Git's usr/bin/bash.exe
+# BASH_BIN="/opt/homebrew/bin/bash"   # default: the bash running the script (Homebrew's, /opt/homebrew or /usr/local); on Windows Git's usr/bin/bash.exe

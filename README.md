@@ -26,7 +26,8 @@ What it does beyond `rclone copy`:
 
 ## Requirements
 
-macOS, Homebrew: `brew install rclone jq bash` (bash ≥ 4), optionally `terminal-notifier` for nicer notifications.
+macOS, Homebrew (Apple Silicon `/opt/homebrew` or Intel `/usr/local`, both fine): `brew install rclone jq bash` (bash ≥ 4;
+the scheduler uses whichever bash runs the script), optionally `terminal-notifier` for nicer notifications.
 `python3` (ships with the Xcode command-line tools) is used for Unicode-normalisation of file names.
 Windows: see [Windows](#windows) below.
 
@@ -57,7 +58,8 @@ in Git Bash; `bash backup.sh …` works too). The Windows-specific parts:
   drive (e.g. `X:`). Use `$USERPROFILE/…` in the config (the Windows default for `LOCAL_DIR` is `$USERPROFILE/Documents`),
   and `cd` to the repo by its full path (`cd /c/Users/<you>/rdms-backup`).
 * **OneDrive**: if Documents is redirected into OneDrive (Files On-Demand), rclone would download every cloud-only
-  file. Back up a genuinely local folder instead.
+  file. Back up a genuinely local folder instead. `status` warns when the folder is inside OneDrive and `probe` counts
+  the cloud-only files (see *cloud-synced folders* under the limits below).
 * Use a machine-specific `REMOTE_PATH` (e.g. `Win_Backup/Documents`) when another machine already backs up with the same account.
 
 ## Setup
@@ -95,7 +97,7 @@ Documents backup   /Users/you/Documents  →  rugdav:Mac_Backup/Documents
 | `status`, `log [N]` | health summary with recent runs; digest of the latest (N-th latest) run |
 | `versions <name or glob>` | earlier versions of a file kept in the versions folder, with the time each was replaced |
 | `orphans` | files on the server that no longer exist locally (or are excluded now), with sizes — pruning candidates |
-| `quota`, `probe`, `diag-keychain` | what the server says about quota; end-to-end test; why the password can't be read |
+| `quota`, `probe`, `diag-keychain` | what the server says about quota; end-to-end test of server and local folder; why the password can't be read |
 | `setup`, `install`, `uninstall`, `pause`, `resume` | keychain item; launchd agent; stop/continue scheduled runs |
 | `gui-run [--wait] <command…>` | run a command inside the GUI login session (needed over SSH: the keychain is locked there) |
 | `rclone <args…>` | rclone with the configured remote and credentials, e.g. `rclone lsd rugdav:` — for browsing and restores |
@@ -126,6 +128,12 @@ are not created, locally deleted files stay on the server (use `orphans` to find
 
 File names: macOS stores accented names in NFD; servers and other clients may hold NFC. rclone compares names
 normalised, and incremental runs look up both spellings, so both are treated as the same file.
+
+**Cloud-synced folders** (OneDrive, iCloud Drive including "Desktop & Documents", Dropbox, Google Drive): a folder that
+a cloud client already syncs gains little from a second copy, and its *online-only* placeholder files would be
+downloaded by every run. `status` warns when the backed-up folder lies inside such a location, and `probe` counts the
+placeholder files (macOS: dataless files and `.icloud` stubs; Windows: the Files On-Demand attribute). Prefer a folder
+that exists only on this computer, or exclude the cloud part.
 
 **File count, not size, is what costs time on the RDMS**: the server commits roughly one small file per second per
 connection; 16 parallel transfers give ~80 files/min and more connections don't help. Tens of thousands of tiny files

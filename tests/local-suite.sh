@@ -181,6 +181,20 @@ if [[ "$OS" == windows ]]; then
   check "task removed"               bash -c "! MSYS2_ARG_CONV_EXCL='*' schtasks.exe /Query /TN nl.rug.rdms-backup.selftest >/dev/null 2>&1"
 fi
 
+echo "== 11. cloud-synced folder warning (status)"
+mkdir -p "$T/OneDrive - Test/docs"; printf 'x\n' > "$T/OneDrive - Test/docs/f.txt"
+cat > "$T/cloud.conf" <<EOF
+LOCAL_DIR="$T/OneDrive - Test/docs"
+REMOTE_OVERRIDE="$T/cloud-target"
+STATE_DIR="$T/cloud-state"
+LOG_DIR="$T/cloud-logs"
+NOTIFY=false
+EOF
+out=$(BACKUP_CONF="$T/cloud.conf" bash "$SCRIPT" status 2>&1)
+check "status warns about a folder inside OneDrive" grep -q 'CLOUD FOLDER' <<<"$out"
+out=$(bk status 2>&1)
+check "status is silent for a normal folder" test "$(grep -c 'CLOUD FOLDER' <<<"$out")" -eq 0
+
 echo
 echo "passed $PASS, failed $FAIL"
 (( FAIL == 0 ))
