@@ -16,6 +16,8 @@ EXCLUDE_FILE="$SCRIPT_DIR/exclude.txt"              # same junk exclusions as th
 
 STATE_DIR="$HOME/Library/Application Support/rugbackup-team"
 LOG_DIR="$HOME/Library/Logs/rugbackup-team"
+# Windows: STATE_DIR="$LOCALAPPDATA/rugbackup-team/state"; LOG_DIR="$LOCALAPPDATA/rugbackup-team/logs"
+#          (the DPAPI password file lives in STATE_DIR, so run `backup.sh -c team setup` as well)
 LAUNCHD_LABEL="nl.rug.rdms-backup.team"
 TICK_MINUTE=37                                      # offset from the main job (:07) so the two never upload at the same time
 RUN_HOUR=3; RUN_HOURS="11 15 19"; FULL_EVERY_DAYS=7
