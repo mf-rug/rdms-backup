@@ -95,6 +95,10 @@ Suggested structure: a `case "$(uname -s)" in Darwin) … ;; MINGW*|MSYS*) … ;
   another program holds without read sharing. They are reported as *in use* (like the Mac's files modified during
   the run) and removed from the verification lists. If they were the only copy errors, the copy pass counts as
   successful. A file that rclone's own retry copied after all is not counted.
+  `split_locked` runs only on Windows and is the only writer of `locked.txt`. The filter in `split_busy` acts only on
+  a non-empty `locked.txt`, so on macOS the verification path, the in-use/failed counts and the exit codes are unchanged.
+* **REMOTE_ROOT**: on Windows a remote of the form `X:/…` is a local drive path, not rclone remote `X:`, so one-letter
+  remote names can't be used there (rclone.exe applies the same rule). On macOS the rule is not applied.
 * `hostname -s` → `${HOSTNAME%%.*}` on both OSes. Shebang `#!/usr/bin/env bash`; on macOS the bash≥4 message names
   `/opt/homebrew/bin/bash`. `BASH_BIN` defaults per OS.
 * `gui-run` runs the command directly on Windows. `diag-keychain` reports on the DPAPI file and a decrypt test.
