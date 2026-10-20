@@ -6,3 +6,5 @@ team-include.txt
 # the retired previous mechanism and lab notes
 old/
 .DS_Store
+# machine-specific notes
+*.local.md
