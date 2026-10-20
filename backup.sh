@@ -806,6 +806,8 @@ install_windows() {
     printf 'export BACKUP_CONF=%q\n' "$(wpath "$CONF")"
     printf 'exec %q %q tick >>%q 2>&1\n' "$BASH_BIN" "$(wpath "$SCRIPT_PATH")" "$LOG_DIR/task.log"
   } > "$tick"
+  # Duration P1D is required: a daily trigger whose repetition has no Duration shows a "Next Run Time" but never fires
+  # (tested on Windows 10 22H2: such a task was never launched, the same trigger with P1D fired every interval)
   printf '\xff\xfe' > "$xml"     # schtasks wants UTF-16LE with BOM (iconv's "UTF-16" is big-endian here)
   cat <<EOF | iconv -f UTF-8 -t UTF-16LE >> "$xml"
 <?xml version="1.0" encoding="UTF-16"?>
@@ -814,7 +816,7 @@ install_windows() {
   <Triggers>
     <CalendarTrigger>
       <StartBoundary>$start</StartBoundary>
-      <Repetition><Interval>PT1H</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
+      <Repetition><Interval>PT1H</Interval><Duration>P1D</Duration><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
       <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>
     </CalendarTrigger>
     <LogonTrigger><UserId>$(xml_esc "$user")</UserId><Delay>PT2M</Delay></LogonTrigger>

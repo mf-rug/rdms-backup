@@ -83,7 +83,9 @@ Suggested structure: a `case "$(uname -s)" in Darwin) … ;; MINGW*|MSYS*) … ;
 * **Scheduler**: `schtasks /Create /XML` (UTF-16LE + BOM; iconv's plain "UTF-16" is big-endian). The task has an hourly
   calendar trigger at `:TICK_MINUTE`, a logon trigger (+2 min), StartWhenAvailable, an interactive token (only when
   logged on), and no stop on battery. Principal and logon trigger carry the user id, because a logon trigger without
-  a user needs admin rights ("Access is denied"). Action:
+  a user needs admin rights ("Access is denied"). The hourly repetition needs an explicit `<Duration>P1D</Duration>`:
+  without it Task Scheduler shows a "Next Run Time" but never fires the trigger. The first install missed its first
+  :07 tick this way; side-by-side 1-minute variants confirmed it, and suite step 10 now checks for it. Action:
   `conhost.exe --headless "<Git>/usr/bin/bash.exe" "<STATE_DIR>/tick.sh"`. The generated `tick.sh` sets `BACKUP_CONF`
   and appends output to `LOG_DIR/task.log`. **`conhost --headless` won**: on a real task run, toasts appeared and no
   console window flashed. So there is no VBS/wscript fallback (VBScript is deprecated).

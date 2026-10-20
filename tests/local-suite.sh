@@ -177,6 +177,9 @@ if [[ "$OS" == windows ]]; then
   bk install >/dev/null 2>&1
   check "task registered"            bash -c "MSYS2_ARG_CONV_EXCL='*' schtasks.exe /Query /TN nl.rug.rdms-backup.selftest >/dev/null 2>&1"
   check "status says registered"     grep -q 'task registered' <<<"$(bk status 2>&1)"
+  # shellcheck disable=SC2016   # PowerShell code: $ is PowerShell's
+  rep=$(MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -Command '(Get-ScheduledTask -TaskName "nl.rug.rdms-backup.selftest").Triggers | ForEach-Object { "$($_.Repetition.Interval)/$($_.Repetition.Duration)" }' 2>/dev/null | tr -d '\r' | grep PT1H)
+  check "hourly repetition has Duration P1D (without it the trigger never fires)" [ "$rep" = "PT1H/P1D" ]
   bk uninstall >/dev/null 2>&1
   check "task removed"               bash -c "! MSYS2_ARG_CONV_EXCL='*' schtasks.exe /Query /TN nl.rug.rdms-backup.selftest >/dev/null 2>&1"
 fi
