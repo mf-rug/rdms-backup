@@ -136,7 +136,7 @@ PYTHON=""
 find_python() {   # python3 semantics; on Windows "python3" may be the Microsoft Store stub, so try running it
   [[ -n "$PYTHON" ]] && return 0
   if [[ "$OS" == mac ]]; then have python3 && PYTHON=python3; return; fi
-  local p; for p in python3 python py; do "$p" -c 'import sys; sys.exit(sys.version_info < (3, 7))' >/dev/null 2>&1 && { PYTHON=$p; return 0; }; done
+  local p; for p in python python3 py; do "$p" -c 'import sys; sys.exit(sys.version_info < (3, 7))' >/dev/null 2>&1 && { PYTHON=$p; return 0; }; done
   return 1
 }
 require() {
@@ -519,7 +519,8 @@ set_latest() {   # LOG_DIR/latest → run dir. Windows: a directory junction (Gi
   local link; link=$(cygpath -w "$LOG_DIR/latest")
   # cmd's rmdir removes only the junction itself; rm -rf might descend into the previous run's folder
   [[ -L "$LOG_DIR/latest" ]] && cmd.exe /c rmdir "$link" >/dev/null 2>&1
-  [[ -e "$LOG_DIR/latest" ]] || cmd.exe /c mklink /J "$link" "$(cygpath -w "$1")" >/dev/null 2>&1 || log "note: could not create the junction $LOG_DIR/latest"
+  if [[ -e "$LOG_DIR/latest" ]]; then log "note: $LOG_DIR/latest is a real folder (not a junction), left alone; remove it to get the link back"; return 0; fi
+  cmd.exe /c mklink /J "$link" "$(cygpath -w "$1")" >/dev/null 2>&1 || log "note: could not create the junction $LOG_DIR/latest"
 }
 
 # ----------------------------------------------------------------------------- commands
