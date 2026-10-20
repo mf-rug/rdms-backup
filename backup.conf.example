@@ -3,16 +3,19 @@
 
 # ---- what and where -------------------------------------------------------------------------
 LOCAL_DIR="$HOME/Documents"              # the folder to back up — any folder you like (one config per folder, see README)
+                                         # Windows (Git Bash): "$HOME/Documents" works too (or "C:/Users/<you>/Documents");
+                                         # if Documents is redirected into OneDrive, pick a genuinely local folder instead
 # BACKUP_NAME="Documents backup"         # name in notifications/status; default "<folder name> backup"
 WEBDAV_URL="https://webdav.data.rug.nl/<your.name>@rug.nl"   # server + your home collection
 WEBDAV_USER="<your.name>@rug.nl"
 WEBDAV_VENDOR="other"                    # rclone webdav vendor; "other" = generic WebDAV (Apache)
-REMOTE_PATH="Mac_Backup/Documents"       # folder below WEBDAV_URL that mirrors LOCAL_DIR (name it after the folder)
+REMOTE_PATH="Mac_Backup/Documents"       # folder below WEBDAV_URL that mirrors LOCAL_DIR (name it after the folder);
+                                         # one per machine: never point two machines at the same REMOTE_PATH
 REMOTE_NAME="rugdav"                     # rclone remote name → the remote is "rugdav:MF_Mac_Backup/Documents"
 
-# ---- credentials: read at run time from the login keychain, never written to disk -------------
+# ---- credentials: macOS login keychain / Windows DPAPI file (STATE_DIR/webdav.cred), see `setup` ----
 KEYCHAIN_SERVICE="rugbackup"                    # generic item created by `backup.sh setup`
-KEYCHAIN_FALLBACK_SERVER="webdav.data.rug.nl"   # Cyberduck's existing internet-password item, used if the above is missing
+KEYCHAIN_FALLBACK_SERVER="webdav.data.rug.nl"   # Cyberduck's existing internet-password item, used if the above is missing (macOS)
 
 # ---- versions (protection against overwritten / corrupted files) -------------------------------
 VERSIONS_KEEP_DAYS=90      # before a remote file is replaced it is moved (server-side, free) into
@@ -35,7 +38,7 @@ INCREMENTAL_MAX_FILES=50000   # more changed files than this → do a full run i
 # ---- feedback ---------------------------------------------------------------------------------
 NOTIFY=true
 NOTIFY_ON_SUCCESS=daily    # true = after every good run, daily = only after the RUN_HOUR run, false = never (failures always notify)
-FAILURE_DIALOG=true        # additionally a dialog box (System Events) on failure / warning / staleness
+FAILURE_DIALOG=true        # additionally a dialog box (System Events / Windows message box) on failure / warning / staleness
 
 # ---- rclone tuning ----------------------------------------------------------------------------
 RCLONE_TRANSFERS=16        # parallel uploads (server commits ~1 file/s per connection; 16 measured 3x faster than 4)
@@ -46,11 +49,13 @@ COMPARE_MODE="update"      # update: re-upload when the local file is newer than
 RCLONE_EXTRA=()            # extra rclone flags, e.g. (--bwlimit 20M) or (--max-size 5G)
 
 # ---- runtime files ----------------------------------------------------------------------------
-STATE_DIR="$HOME/Library/Application Support/rugbackup"   # state.json, runs.jsonl, rclone.conf (no secrets)
-LOG_DIR="$HOME/Library/Logs/rugbackup"                    # one folder per run + launchd.log
+# defaults — macOS: ~/Library/Application Support/rugbackup and ~/Library/Logs/rugbackup
+#            Windows: %LOCALAPPDATA%/rugbackup/state and %LOCALAPPDATA%/rugbackup/logs
+# STATE_DIR="$HOME/Library/Application Support/rugbackup"   # state.json, runs.jsonl, rclone.conf (no secrets)
+# LOG_DIR="$HOME/Library/Logs/rugbackup"                    # one folder per run + launchd.log / task.log
 LOG_KEEP_DAYS=90
 
-# ---- launchd ----------------------------------------------------------------------------------
-LAUNCHD_LABEL="nl.rug.rdms-backup"
+# ---- scheduler: launchd agent (macOS) / Task Scheduler task (Windows) ---------------------------
+LAUNCHD_LABEL="nl.rug.rdms-backup"   # launchd label, or the scheduled task's name on Windows
 TICK_MINUTE=7              # hourly wake-up at hh:07
-BASH_BIN="/opt/homebrew/bin/bash"
+# BASH_BIN="/opt/homebrew/bin/bash"   # default; on Windows Git's usr/bin/bash.exe

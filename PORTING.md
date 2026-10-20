@@ -1,6 +1,8 @@
 # Porting rdms-backup to Windows (Git Bash)
 
-Status: not started. This page is the brief for whoever (or whatever) does it. The target is the **native Windows
+Status: ported on branch `windows-port`. The local suite (`tests/local-suite.sh`) passes on Windows 10 / Git Bash 5.3
+/ rclone 1.75; scheduler, toast and dialog were tested on a real task. Still to do: the macOS suite run and the RDMS
+step (5). The brief below is kept as written; **"As built"** at the end records where the implementation differs and why. The target is the **native Windows
 build of Claude Code / Git for Windows environment**: `backup.sh` keeps running as bash, with an OS switch for the
 handful of places that touch the operating system. The rclone part needs no change at all.
 
@@ -61,3 +63,40 @@ Suggested structure: a `case "$(uname -s)" in Darwin) … ;; MINGW*|MSYS*) … ;
 * README gets a "Windows" subsection: Git for Windows, `winget install Rclone.Rclone jqlang.jq Python.Python.3.12`,
   where state/logs live, Task Scheduler notes, the path-conversion caveat.
 * The macOS behaviour is unchanged (run the local suite on a Mac too).
+
+## As built (deviations from the brief, with reasons)
+
+* **OS switch** uses `$OSTYPE` (`msys*`/`cygwin*`), not `uname`: when the scheduled task starts bash, PATH may not
+  contain `/usr/bin` yet.
+* **Paths**: `MSYS2_ARG_CONV_EXCL='*'` is exported for the whole script, not per rclone call. All config paths
+  (`LOCAL_DIR`, `STATE_DIR`, `LOG_DIR`, `EXCLUDE_FILE`, `FILTER_FILE`, `BASH_BIN`, a local `REMOTE_OVERRIDE`) are
+  normalised once with `cygpath -m` (`wpath`). Temp paths from `mktemp` that go to native programs go through `wpath`.
+  The global switch also keeps `schtasks /Create` flags intact. PATH is prepended (`/usr/bin` first), not replaced:
+  rclone/jq live in WinGet folders, and System32 has its own `find.exe`/`timeout.exe`.
+* **jq.exe writes CRLF**: on Windows `jq` is a function calling `jq -b`. Without it, every `$(jq -r …)` ends in `\r`.
+* **python**: found by *running* `python3`, then `python`, then `py`. `command -v python3` finds the Microsoft Store stub
+  (exit 49). `PYTHONUTF8=1`. The NFC/NFD double spelling of the incremental list is skipped on Windows (NTFS has no
+  NFD names), so python is only needed for `orphans`.
+* **Password**: bash prompts (`read -s`, twice). The secret goes to PowerShell on **stdin** as raw UTF-8 bytes and comes back on
+  stdout the same way, never as an argument and with no CRLF. `Read-Host` under mintty is unreliable. The file is user-
+  and machine-bound.
+* **Scheduler**: `schtasks /Create /XML` (UTF-16LE + BOM; iconv's plain "UTF-16" is big-endian). The task has an hourly
+  calendar trigger at `:TICK_MINUTE`, a logon trigger (+2 min), StartWhenAvailable, an interactive token (only when
+  logged on), and no stop on battery. Principal and logon trigger carry the user id, because a logon trigger without
+  a user needs admin rights ("Access is denied"). Action:
+  `conhost.exe --headless "<Git>/usr/bin/bash.exe" "<STATE_DIR>/tick.sh"`. The generated `tick.sh` sets `BACKUP_CONF`
+  and appends output to `LOG_DIR/task.log`. **`conhost --headless` won**: on a real task run, toasts appeared and no
+  console window flashed. So there is no VBS/wscript fallback (VBScript is deprecated).
+* **`LOG_DIR/latest`**: Git Bash `ln -s` silently deep-copies a folder, so this is a directory junction
+  (`cmd /c mklink /J`). It is replaced with `cmd /c rmdir` (only the junction; `rm -rf` could descend into the previous
+  run). MSYS `readlink` resolves junctions, so `status` is unchanged. The suite checks that the previous run folder
+  survives.
+* **Locked files** (Windows only): rclone fails with "…being used by another process" (sharing violation) for files
+  another program holds without read sharing. They are reported as *in use* (like the Mac's files modified during
+  the run) and removed from the verification lists. If they were the only copy errors, the copy pass counts as
+  successful. A file that rclone's own retry copied after all is not counted.
+* `hostname -s` → `${HOSTNAME%%.*}` on both OSes. Shebang `#!/usr/bin/env bash`; on macOS the bash≥4 message names
+  `/opt/homebrew/bin/bash`. `BASH_BIN` defaults per OS.
+* `gui-run` runs the command directly on Windows. `diag-keychain` reports on the DPAPI file and a decrypt test.
+  `retire-old` refuses on Windows.
+* A slot hour removed by a DST change is skipped (GNU `date -d` rejects it; BSD `date` silently shifted it).
