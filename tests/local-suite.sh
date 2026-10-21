@@ -198,6 +198,28 @@ check "status warns about a folder inside OneDrive" grep -q 'CLOUD FOLDER' <<<"$
 out=$(bk status 2>&1)
 check "status is silent for a normal folder" test "$(grep -c 'CLOUD FOLDER' <<<"$out")" -eq 0
 
+echo "== 12. init writes a config without prompts; setup refuses passwords passed in"
+ic="$T/init.conf"; want=$(cd "$SRC" && pwd -P); [[ "$OS" == windows ]] && want=$(cygpath -m "$want")   # init stores the canonical path
+out=$(BACKUP_CONF="$ic" bash "$SCRIPT" init --user "test.user@rug.nl" --folder "$SRC" --hours "4 12" 2>&1); ec=$?
+check "init exits 0"                 [ "$ec" -eq 0 ]
+check "init prints the summary"      grep -q 'runs at:      4 12h' <<<"$out"
+check "LOCAL_DIR written"            grep -qF "LOCAL_DIR=\"$want\"" "$ic"
+check "account + URL written"        grep -q '^WEBDAV_USER="test.user@rug.nl"' "$ic"
+check "hours: main 4, others 12"     grep -q '^RUN_HOUR=4' "$ic"
+check "remote path <host>_Backup/<folder>, spaces replaced" grep -q '^REMOTE_PATH=".*_Backup/src_dir"' "$ic"
+check "the rest of the example is kept" grep -q '^VERSIONS_KEEP_DAYS=90' "$ic"
+printf 'STATE_DIR="%s"\nLOG_DIR="%s"\nNOTIFY=false\n' "$T/init-state" "$T/init-logs" >> "$ic"
+out=$(BACKUP_CONF="$ic" bash "$SCRIPT" status 2>&1); check "generated config loads (status shows the remote)" grep -q '_Backup/src_dir' <<<"$out"
+out=$(BACKUP_CONF="$ic" bash "$SCRIPT" init --user "test.user@rug.nl" --folder "$SRC" 2>&1); check "init refuses to overwrite" grep -q 'config exists' <<<"$out"
+out=$(BACKUP_CONF="$T/none.conf" bash "$SCRIPT" init --user "someone@gmail.com" --folder "$SRC" 2>&1); check "init rejects a non-RUG address" grep -q 'RUG address' <<<"$out"
+out=$(BACKUP_CONF="$ic" bash "$SCRIPT" setup --password x 2>&1); check "setup refuses --password" grep -q 'never takes a password' <<<"$out"
+out=$(RUGBACKUP_PASSWORD=x BACKUP_CONF="$ic" bash "$SCRIPT" setup 2>&1); check "setup refuses a password in the environment" grep -q 'never passed through the environment' <<<"$out"
+out=$(BACKUP_CONF="$T/none.conf" bash "$SCRIPT" status 2>&1); check "no config: status says how to create one" grep -q 'Setup.command' <<<"$out"
+nc="$T/backup-trial.conf"; BACKUP_CONF="$nc" bash "$SCRIPT" init --user "test.user@rug.nl" --folder "$SRC" --quiet
+check "named config (-c trial): own task label"   grep -q '^LAUNCHD_LABEL="nl.rug.rdms-backup.trial"' "$nc"
+check "named config: own state and log folders"  grep -q '^STATE_DIR=".*rugbackup-trial' "$nc" && grep -q '^LOG_DIR=".*rugbackup-trial' "$nc"
+check "named config: offset tick minute"         grep -q '^TICK_MINUTE=37' "$nc"
+
 echo
 echo "passed $PASS, failed $FAIL"
 (( FAIL == 0 ))

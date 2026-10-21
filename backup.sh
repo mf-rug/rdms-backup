@@ -7,7 +7,11 @@
 #   backup.sh check                       full verification only (nothing is uploaded)
 #   backup.sh status                      health summary + recent runs
 #   backup.sh log [N]                     digest of the latest (or N-th latest) run
-#   backup.sh setup                       store the WebDAV password in the login keychain
+#   backup.sh wizard                      guided setup with a few dialogs (what Setup.command / Setup.cmd run)
+#   backup.sh init --user a@rug.nl [--folder DIR] [--remote-path P] [--hours "3 11 15 19"] [--name N] [--force]
+#                                         write backup.conf without any prompt (scripts, or a Claude doing the setup)
+#   backup.sh setup [--gui]               store the WebDAV password (keychain / DPAPI file), test the connection;
+#                                         --gui, or no terminal: the password is typed into a dialog, never passed in
 #   backup.sh install | uninstall         create / remove the launchd agent
 #   backup.sh pause | resume              stop / restart scheduled runs (agent stays loaded)
 #   backup.sh retire-old [--yes]          unload the old duck agents + cron line, moving them into old/
@@ -88,9 +92,15 @@ if [[ "$OS" == windows ]]; then BASH_BIN="$(cygpath -m /usr/bin/bash.exe)"
 elif [[ "$BASH" == /* && -x "$BASH" ]]; then BASH_BIN="$BASH"       # the bash (>= 4) running this script: Homebrew's, /opt/homebrew (Apple Silicon) or /usr/local (Intel)
 elif [[ -x /usr/local/bin/bash ]]; then BASH_BIN="/usr/local/bin/bash"; else BASH_BIN="/opt/homebrew/bin/bash"; fi
 
-[[ -f "$CONF" ]] || { echo "config not found: $CONF" >&2; exit 2; }
-# shellcheck disable=SC1090
-source "$CONF"
+case "${1:-}" in ""|init|wizard|help|--help|-h) CONF_OPTIONAL=1 ;; *) CONF_OPTIONAL=0 ;; esac
+if [[ -f "$CONF" ]]; then
+  # shellcheck disable=SC1090
+  source "$CONF"
+elif (( ! CONF_OPTIONAL )); then
+  echo "config not found: $CONF" >&2
+  echo "create one: double-click Setup.command / Setup.cmd (dialogs), or: backup.sh init --user you@rug.nl [--folder DIR], or copy backup.conf.example" >&2
+  exit 2
+fi
 
 wpath() { if [[ "$OS" == windows ]]; then cygpath -m "$1"; else printf '%s' "$1"; fi; }   # path as native programs (rclone.exe …) read it
 if [[ "$OS" == windows ]]; then
@@ -150,7 +160,7 @@ require() {
     die "missing dependency: $c ($hint)"
   done
 }
-usage()   { sed -n '2,22p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'; }
+usage()   { sed -n '2,26p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'; }
 
 # ----------------------------------------------------------------------------- OS layer: dates, small tools, PowerShell
 if [[ "$OS" == windows ]]; then
@@ -201,6 +211,89 @@ cloud_only_count() {   # cloud_only_count <dir> <seconds> → "N", "N+" (scan hi
     n=$(grep -c . "$out" || true); (( ec == 124 )) && n="$n+"
   fi
   rm -f "$out"; printf '%s\n' "$n"
+}
+
+# ----------------------------------------------------------------------------- dialogs (wizard, setup --gui)
+# AppleScript on macOS, WinForms through PowerShell on Windows. Text reaches PowerShell in environment variables, never
+# on the command line. Every dialog gives up after a while, so an unattended call cannot hang forever. Return 1 =
+# cancelled / No / timed out. The password dialog's text goes nowhere but into the keychain / DPAPI file.
+GUI_TITLE="RDMS backup"
+osa_run() {   # osa_run <timeout s> <applescript line…>  (inside "tell application System Events", brought to front)
+  local t=$1; shift; local -a a=(); local l; for l in "$@"; do a+=(-e "$l"); done
+  tmo "$t" osascript -e 'tell application "System Events"' -e 'activate' "${a[@]}" -e 'end tell' 2>/dev/null
+}
+# shellcheck disable=SC2016   # PowerShell code: $ is PowerShell's
+PS_ALERT='Add-Type -AssemblyName System.Windows.Forms
+  $b = switch ($env:BK_KIND) { "okcancel" { "OKCancel" } "yesno" { "YesNo" } default { "OK" } }
+  $r = [System.Windows.Forms.MessageBox]::Show($env:BK_MSG, $env:BK_TITLE, $b, "Information")
+  [Console]::Out.Write($r.ToString())'
+# shellcheck disable=SC2016
+PS_ASK='Add-Type -AssemblyName Microsoft.VisualBasic
+  $r = [Microsoft.VisualBasic.Interaction]::InputBox($env:BK_MSG, $env:BK_TITLE, $env:BK_DEF)
+  $b = [Text.Encoding]::UTF8.GetBytes($r); $o = [Console]::OpenStandardOutput(); $o.Write($b, 0, $b.Length); $o.Flush()'
+# shellcheck disable=SC2016
+PS_FOLDER='Add-Type -AssemblyName System.Windows.Forms
+  $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = $env:BK_MSG; $d.ShowNewFolderButton = $false
+  if ($env:BK_DEF) { $d.SelectedPath = $env:BK_DEF }
+  if ($d.ShowDialog() -ne "OK") { exit 1 }
+  $b = [Text.Encoding]::UTF8.GetBytes($d.SelectedPath); $o = [Console]::OpenStandardOutput(); $o.Write($b, 0, $b.Length); $o.Flush()'
+# shellcheck disable=SC2016
+PS_PW_DIALOG='$ErrorActionPreference="Stop"; Add-Type -AssemblyName System.Windows.Forms
+  $f = New-Object Windows.Forms.Form; $f.Text = $env:BK_TITLE; $f.Width = 440; $f.Height = 175; $f.StartPosition = "CenterScreen"
+  $f.TopMost = $true; $f.FormBorderStyle = "FixedDialog"; $f.MaximizeBox = $false; $f.MinimizeBox = $false
+  $l = New-Object Windows.Forms.Label; $l.Text = $env:BK_MSG; $l.SetBounds(12, 12, 400, 44); $f.Controls.Add($l)
+  $t = New-Object Windows.Forms.TextBox; $t.UseSystemPasswordChar = $true; $t.SetBounds(12, 60, 400, 24); $f.Controls.Add($t)
+  $ok = New-Object Windows.Forms.Button; $ok.Text = "OK"; $ok.DialogResult = "OK"; $ok.SetBounds(246, 98, 80, 28); $f.Controls.Add($ok); $f.AcceptButton = $ok
+  $c = New-Object Windows.Forms.Button; $c.Text = "Cancel"; $c.DialogResult = "Cancel"; $c.SetBounds(332, 98, 80, 28); $f.Controls.Add($c); $f.CancelButton = $c
+  $f.Add_Shown({ $t.Focus() })
+  if ($f.ShowDialog() -ne "OK") { exit 1 }
+  $b = [Text.Encoding]::UTF8.GetBytes($t.Text); $o = [Console]::OpenStandardOutput(); $o.Write($b, 0, $b.Length); $o.Flush()'
+ps_gui() { tmo "$1" powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -STA -Command "$2" </dev/null 2>/dev/null; }
+gui_alert() {   # gui_alert <text> [ok|okcancel|yesno] → 0 for OK/Yes, 1 for Cancel/No/timeout
+  local text=$1 kind=${2:-ok} out btn
+  if [[ "$OS" == windows ]]; then
+    out=$(BK_TITLE="$GUI_TITLE" BK_MSG="$text" BK_KIND="$kind" ps_gui 1800 "$PS_ALERT" | tr -d '\r[:space:]') || return 1
+    [[ "$out" == OK || "$out" == Yes ]]
+  else
+    case "$kind" in okcancel) btn='"Cancel", "OK"' ;; yesno) btn='"No", "Yes"' ;; *) btn='"OK"' ;; esac
+    out=$(osa_run 1800 "display dialog \"$(osa_esc "$text")\" with title \"$(osa_esc "$GUI_TITLE")\" buttons {$btn} default button ${btn##*, } giving up after 1790") || return 1
+    [[ "$out" == *"gave up:true"* ]] && return 1
+    [[ "$out" == *"button returned:OK"* || "$out" == *"button returned:Yes"* ]]
+  fi
+}
+gui_ask() {   # gui_ask <prompt> <default> → text; 1 on cancel/empty/timeout
+  local out
+  if [[ "$OS" == windows ]]; then
+    out=$(BK_TITLE="$GUI_TITLE" BK_MSG="$1" BK_DEF="$2" ps_gui 1800 "$PS_ASK" | tr -d '\r') || return 1
+  else
+    out=$(osa_run 1800 "display dialog \"$(osa_esc "$1")\" default answer \"$(osa_esc "$2")\" with title \"$(osa_esc "$GUI_TITLE")\" buttons {\"Cancel\", \"Continue\"} default button \"Continue\" giving up after 1790") || return 1
+    [[ "$out" == *"gave up:true"* ]] && return 1
+    out=${out%, gave up:*}; out=${out#*text returned:}
+  fi
+  [[ -n "$out" ]] || return 1
+  printf '%s' "$out"
+}
+gui_folder() {   # gui_folder <prompt> <default dir> → chosen folder (C:/… on Windows); 1 on cancel/timeout
+  local def=$2 out; [[ -d "$def" ]] || def=$HOME
+  if [[ "$OS" == windows ]]; then
+    out=$(BK_MSG="$1" BK_DEF="$(cygpath -w "$def")" ps_gui 1800 "$PS_FOLDER" | tr -d '\r') || return 1
+    [[ -n "$out" ]] || return 1; cygpath -m "$out"
+  else
+    out=$(osa_run 1800 "POSIX path of (choose folder with prompt \"$(osa_esc "$1")\" default location (POSIX file \"$(osa_esc "$def")\"))") || return 1
+    [[ -n "$out" ]] || return 1; printf '%s' "${out%/}"
+  fi
+}
+pw_dialog() {   # pw_dialog <prompt> → the typed text; 1 on cancel/empty/timeout (10 min). Masked field, nothing logged.
+  local out
+  if [[ "$OS" == windows ]]; then
+    out=$(BK_TITLE="$GUI_TITLE" BK_MSG="$1" ps_gui 600 "$PS_PW_DIALOG") || return 1
+  else
+    out=$(osa_run 600 "display dialog \"$(osa_esc "$1")\" default answer \"\" with hidden answer with title \"$(osa_esc "$GUI_TITLE")\" buttons {\"Cancel\", \"OK\"} default button \"OK\" giving up after 590") || return 1
+    [[ "$out" == *"gave up:true"* ]] && return 1
+    out=${out%, gave up:*}; out=${out#*text returned:}
+  fi
+  [[ -n "$out" ]] || return 1
+  printf '%s' "$out"
 }
 
 RUN_DIR=""; RUN_LOG=""
@@ -746,38 +839,185 @@ cmd_log() {
   echo "== ${d%/}"; cat "$d/run.log"
 }
 
-cmd_setup() {
-  if [[ "$OS" == windows ]]; then setup_windows; else setup_mac; fi
-  printf 'connection test: '
-  local err; err=$(mktemp)
-  if setup_rclone && tmo 90 rclone --config "$RCLONE_CONF" lsf --max-depth 1 "$REMOTE_ROOT" >/dev/null 2>"$err"; then echo "OK ($REMOTE_ROOT)"; rm -f "$err"
-  else echo "FAILED — rclone said:"; sed 's/^/   /' "$err" | tail -n 8; rm -f "$err"; echo "   (check WEBDAV_URL / WEBDAV_USER / password; proxy or RCLONE_* variables in this shell can interfere: env | grep -iE 'proxy|rclone')"; exit 1; fi
+# ----------------------------------------------------------------------------- init (no prompts) and wizard (dialogs)
+conf_quote() { local s=${1//\\/\\\\}; s=${s//\"/\\\"}; s=${s//\$/\\\$}; printf '"%s"' "$s"; }
+machine_label() {   # the computer's name as a folder-name-safe word (default remote folder "<name>_Backup/<folder>")
+  local n=""
+  if [[ "$OS" == windows ]]; then n=${COMPUTERNAME:-}; else n=$(scutil --get ComputerName 2>/dev/null || true); fi
+  [[ -n "$n" ]] || n=$HOST_SHORT
+  n=${n//\'/}; n=$(printf '%s' "$n" | tr -c 'A-Za-z0-9_-' '_' | tr -s '_'); n=${n#_}; n=${n%_}
+  printf '%s' "${n:-Computer}"
 }
-setup_windows() {
+cmd_init() {   # init --user a@rug.nl [--folder DIR] [--remote-path P] [--hours "3 11 15 19"] [--name N] [--force] [--quiet]
+  local user="" folder="" rpath="" hours="" name="" force=0 quiet=0
+  while (( $# )); do
+    case "$1" in
+      --user) user=${2:-}; shift 2 ;;        --folder) folder=${2:-}; shift 2 ;;
+      --remote-path) rpath=${2:-}; shift 2 ;; --hours) hours=${2:-}; shift 2 ;;
+      --name) name=${2:-}; shift 2 ;;        --force) force=1; shift ;;   --quiet) quiet=1; shift ;;
+      --password|--password=*) die "init never takes a password: run 'backup.sh setup' afterwards and type it into the prompt or dialog" ;;
+      *) die "init: unknown option '$1' (init --user a@rug.nl [--folder DIR] [--remote-path P] [--hours \"3 11 15 19\"] [--name N] [--force])" ;;
+    esac
+  done
+  [[ -f "$CONF" && $force == 0 ]] && die "config exists: $CONF (edit it, or: init --force to replace it)"
+  [[ "$user" =~ ^[A-Za-z0-9._%+-]+@rug\.nl$ ]] || die "init: --user must be your RUG address (name@rug.nl), got '${user:-nothing}'"
+  [[ -n "$folder" ]] || folder=$LOCAL_DIR
+  [[ "$folder" == "~"* ]] && folder="$HOME${folder#\~}"
+  [[ -d "$folder" ]] || die "init: folder not found: $folder"
+  folder=$(wpath "$(cd "$folder" && pwd -P)")
+  if [[ -z "$rpath" ]]; then rpath="$(machine_label)_Backup/$(basename "$folder")"; rpath=${rpath// /_}; fi
+  rpath=${rpath#/}; rpath=${rpath%/}; [[ -n "$rpath" ]] || die "init: --remote-path is empty"
+  [[ -n "$hours" ]] || hours="3 11 15 19"
+  local -a hs=(); local h
+  for h in $hours; do
+    if ! { [[ "$h" =~ ^[0-9]{1,2}$ ]] && (( 10#$h < 24 )); }; then die "init: --hours wants hours 0-23 separated by spaces, got '$hours'"; fi
+    hs+=("$((10#$h))")
+  done
+  local main=${hs[0]} rest="${hs[*]:1}" example="$SCRIPT_DIR/backup.conf.example" tmp line key cmt croot="" cname="" sd="" ld=""
+  [[ -f "$example" ]] || die "missing $example"
+  # a second config (backup-<name>.conf, used with -c <name>) needs its own scheduler job, state and logs
+  [[ "$(basename "$CONF")" =~ ^backup-(.+)\.conf$ ]] && cname=${BASH_REMATCH[1]}
+  if [[ -n "$cname" ]]; then
+    if [[ "$OS" == windows ]]; then sd="$(cygpath -m "$LOCALAPPDATA")/rugbackup-$cname/state"; ld="$(cygpath -m "$LOCALAPPDATA")/rugbackup-$cname/logs"
+    else sd="\$HOME/Library/Application Support/rugbackup-$cname"; ld="\$HOME/Library/Logs/rugbackup-$cname"; fi
+  fi
+  croot=$(cloud_root_of "$folder") || true
+  tmp=$(mktemp)
+  { echo "# backup.conf — written by 'backup.sh init' on $(ts). Everything not set here keeps the defaults explained below."
+    while IFS= read -r line; do
+      key=${line%%=*}; cmt=""; [[ "$line" == *"  #"* ]] && cmt="   #${line#*  #}"
+      case "$key" in
+        LOCAL_DIR)        echo "LOCAL_DIR=$(conf_quote "$folder")$cmt" ;;
+        "# BACKUP_NAME")  if [[ -n "$name" ]]; then echo "BACKUP_NAME=$(conf_quote "$name")$cmt"; else echo "$line"; fi ;;
+        WEBDAV_URL)       echo "WEBDAV_URL=\"https://webdav.data.rug.nl/$user\"$cmt" ;;
+        WEBDAV_USER)      echo "WEBDAV_USER=\"$user\"" ;;
+        REMOTE_PATH)      echo "REMOTE_PATH=$(conf_quote "$rpath")$cmt" ;;
+        RUN_HOUR)         echo "RUN_HOUR=$main$cmt" ;;
+        RUN_HOURS)        echo "RUN_HOURS=\"$rest\"$cmt" ;;
+        LAUNCHD_LABEL)    if [[ -n "$cname" ]]; then echo "LAUNCHD_LABEL=\"nl.rug.rdms-backup.$cname\"$cmt"; else echo "$line"; fi ;;
+        TICK_MINUTE)      if [[ -n "$cname" ]]; then echo "TICK_MINUTE=37$cmt"; else echo "$line"; fi ;;
+        "# STATE_DIR")    if [[ -n "$cname" ]]; then echo "STATE_DIR=\"$sd\"$cmt"; else echo "$line"; fi ;;
+        "# LOG_DIR")      if [[ -n "$cname" ]]; then echo "LOG_DIR=\"$ld\"$cmt"; else echo "$line"; fi ;;
+        *)                echo "$line" ;;
+      esac
+    done < "$example"
+  } > "$tmp"
+  mv "$tmp" "$CONF" || die "could not write $CONF"
+  (( quiet )) && return 0
+  echo "wrote $CONF"
+  echo "  folder:       $folder"
+  [[ -n "$croot" ]] && echo "  ⚠ inside a cloud-synced location ($croot): online-only files would be downloaded by every run; prefer a folder that exists only on this computer"
+  echo "  account:      $user"
+  echo "  on server:    $rpath   (below https://webdav.data.rug.nl/$user)"
+  echo "  runs at:      ${hs[*]}h  (main slot ${main}h: weekly full pass + daily notification)"
+  echo "next: backup.sh setup     (the password; then: run --dry-run --full, run --full, install)"
+}
+
+scheduler_kick() {   # start the hourly job now (first run after the wizard)
+  if [[ "$OS" == windows ]]; then schtasks.exe /Run /TN "$LAUNCHD_LABEL" >/dev/null 2>&1
+  else launchctl kickstart "gui/$(id -u)/$LAUNCHD_LABEL" >/dev/null 2>&1; fi
+}
+cmd_wizard() {   # guided setup: dependencies, address, folder, summary → config → (second phase) password, test, install, first run
+  [[ "$OS" == mac && -n "${SSH_CONNECTION:-}" ]] && die "the wizard needs the Mac's own screen: double-click Setup.command on the Mac, or: backup.sh gui-run --wait wizard"
+  local -a missing=(); local c hint user folder rpath croot
+  for c in rclone jq; do have "$c" || missing+=("$c"); done; find_python || missing+=(python3)
+  if (( ${#missing[@]} )); then
+    if [[ "$OS" == windows ]]; then hint="winget install Rclone.Rclone jqlang.jq Python.Python.3.12"; else hint="brew install rclone jq"; fi
+    gui_alert "Missing on this computer: ${missing[*]}."$'\n\n'"Install them first: paste this line into a terminal:"$'\n\n'"$hint"$'\n\n'"Then start the setup again." ok; exit 2
+  fi
+  if [[ -f "$CONF" ]]; then
+    gui_alert "A configuration already exists:"$'\n'"$CONF"$'\n\n'"Yes: start over and replace it."$'\n'"No: keep it and stop." yesno || exit 0
+  fi
+  gui_alert "This sets up an automatic backup of one folder to your RUG research storage (RDMS)."$'\n\n'"It runs by itself at 3, 11, 15 and 19 h, keeps earlier versions of changed files for 90 days, checks after every run that everything arrived, and tells you when something is wrong."$'\n\n'"You will be asked for your RUG address, the folder, and your password (typed into a window; stored only on this computer)." okcancel || exit 0
+  user="@rug.nl"
+  while :; do
+    user=$(gui_ask "Your RUG address (name@rug.nl):" "$user") || exit 0; user=${user//[[:space:]]/}
+    [[ "$user" =~ ^[A-Za-z0-9._%+-]+@rug\.nl$ ]] && break
+    gui_alert "'$user' does not look like a RUG address (expected name@rug.nl)." ok || exit 0
+  done
+  while :; do
+    folder=$(gui_folder "Choose the folder to back up (your Documents folder is a good choice)" "$LOCAL_DIR") || exit 0
+    if croot=$(cloud_root_of "$folder"); then
+      gui_alert "$folder"$'\n\n'"lies inside a cloud-synced location ($croot). Files that exist only in the cloud would be downloaded by every run, and files already in the cloud gain little from a second copy."$'\n\n'"Yes: use it anyway."$'\n'"No: pick another folder." yesno || continue
+    fi
+    break
+  done
+  rpath="$(machine_label)_Backup/$(basename "$folder")"; rpath=${rpath// /_}
+  gui_alert "Folder:   $folder"$'\n'"Account:  $user"$'\n'"On the server:  $rpath"$'\n'"Runs at:  3, 11, 15, 19 h"$'\n\n'"Continue? Next comes your password." okcancel || exit 0
+  cmd_init --user "$user" --folder "$folder" --remote-path "$rpath" --force --quiet || { gui_alert "Could not write the configuration ($CONF). See the terminal window for details." ok; exit 2; }
+  BACKUP_CONF="$CONF" exec "$BASH" "$SCRIPT_PATH" wizard-finish   # re-read the new config
+}
+cmd_wizard_finish() {   # second phase of the wizard, with the new config loaded
+  local tries=0
+  while :; do
+    tries=$((tries+1))
+    if [[ "$OS" == windows ]]; then setup_windows 1 >/dev/null; else setup_mac 1 >/dev/null; fi || exit 2
+    conn_test && break
+    (( tries < 3 )) || { gui_alert "Three attempts failed:"$'\n\n'"$CONN_ERR"$'\n\n'"Check your address in $CONF and your password, then start the setup again." ok; exit 2; }
+    gui_alert "Could not connect with that password:"$'\n\n'"$CONN_ERR"$'\n\n'"Try again?" okcancel || exit 2
+  done
+  cmd_install >/dev/null || { gui_alert "The password works, but installing the schedule failed. Run 'backup.sh install' in a terminal to see why." ok; exit 2; }
+  scheduler_kick
+  gui_alert "Done. The first backup has started in the background; with many files it takes hours, and later runs are quick."$'\n\n'"From now on it runs by itself. You hear from it when something is wrong, and once a day at 3 am that all is well."$'\n\n'"In a terminal, 'backup.sh status' shows its health." ok
+}
+
+cmd_setup() {   # setup [--gui]: store the password (typed by a person), then test the connection
+  local gui=0 v
+  while (( $# )); do case "$1" in --gui) gui=1 ;; --password|--password=*|-p) die "setup never takes a password on the command line; it is typed into the prompt or the dialog" ;; *) die "setup: unknown option '$1'" ;; esac; shift; done
+  for v in RUGBACKUP_PASSWORD WEBDAV_PASSWORD BACKUP_PASSWORD; do [[ -n "${!v:-}" ]] && die "setup ignores \$$v on purpose: the password is typed into the prompt or the dialog, never passed through the environment"; done
+  [[ -t 0 ]] || gui=1
+  if [[ "$OS" == windows ]]; then setup_windows "$gui"; else setup_mac "$gui"; fi
+  printf 'connection test: '
+  if conn_test; then echo "OK ($REMOTE_ROOT)"; return 0; fi
+  echo "FAILED — rclone said:"; echo "   ${CONN_ERR//$'\n'/$'\n'   }"
+  echo "   (check WEBDAV_URL / WEBDAV_USER / password; proxy or RCLONE_* variables in this shell can interfere: env | grep -iE 'proxy|rclone')"
+  (( gui )) && gui_alert "Password stored, but the connection test failed:"$'\n\n'"$CONN_ERR"$'\n\n'"Check your address in the config and the password, then run the setup again." ok
+  exit 1
+}
+CONN_ERR=""
+conn_test() {   # list the remote root with the stored password; CONN_ERR holds rclone's last lines on failure
+  local err; err=$(mktemp); CONN_ERR=""
+  if setup_rclone 2>"$err" && tmo 90 rclone --config "$RCLONE_CONF" lsf --max-depth 1 "$REMOTE_ROOT" >/dev/null 2>"$err"; then rm -f "$err"; return 0; fi
+  CONN_ERR=$(tail -n 8 "$err" 2>/dev/null); rm -f "$err"; [[ -n "$CONN_ERR" ]] || CONN_ERR="no password stored, or rclone gave no message ($KEYCHAIN_HINT)"
+  return 1
+}
+setup_windows() {   # setup_windows <gui 0/1>
   require powershell.exe rclone
   [[ -n "$WEBDAV_USER" ]] || die "WEBDAV_USER is not set in $CONF"
-  [[ -t 0 ]] || die "setup needs a terminal to read the password (run it in Git Bash)"
   state_init
   echo "Storing the WebDAV password for $WEBDAV_USER in $CRED_FILE"
   echo "(encrypted with Windows DPAPI: only this Windows user on this machine can read it; a copied state folder needs setup again)."
   local pw pw2
-  read -r -s -p "WebDAV password: " pw; echo
-  read -r -s -p "again: " pw2; echo
+  if (( $1 )); then
+    pw=$(pw_dialog "WebDAV password for $WEBDAV_USER (stored encrypted on this computer only):") || die "no password entered (dialog cancelled or timed out)"
+  else
+    read -r -s -p "WebDAV password: " pw; echo
+    read -r -s -p "again: " pw2; echo
+    [[ "$pw" == "$pw2" ]] || die "the two entries differ"
+    unset pw2
+  fi
   [[ -n "$pw" ]] || die "empty password"
-  [[ "$pw" == "$pw2" ]] || die "the two entries differ"
-  unset pw2
   printf '%s' "$pw" | BK_CRED="$CRED_FILE" pwsh_run "$PS_CRED_WRITE" || { unset pw; die "could not write $CRED_FILE"; }
   printf 'read-back: '
   if [[ "$(get_password)" == "$pw" ]]; then echo OK; else unset pw; die "FAILED — the stored password does not read back identically"; fi
   unset pw
 }
-setup_mac() {
+setup_mac() {   # setup_mac <gui 0/1>
   require security rclone
   [[ -n "$WEBDAV_USER" ]] || die "WEBDAV_USER is not set in $CONF"
   echo "Storing the WebDAV password for $WEBDAV_USER as login-keychain item '$KEYCHAIN_SERVICE'."
-  echo "(Do this in a Terminal on the Mac itself — over SSH the keychain is locked.)"
-  security add-generic-password -a "$WEBDAV_USER" -s "$KEYCHAIN_SERVICE" -l "RUG WebDAV backup ($WEBDAV_USER)" \
-      -j "read by $SCRIPT_PATH" -T /usr/bin/security -U || die "could not store the item (keychain locked? try: security unlock-keychain)"
+  echo "(Do this at the Mac itself — over SSH the keychain is locked.)"
+  if (( $1 )); then
+    local pw; pw=$(pw_dialog "WebDAV password for $WEBDAV_USER (stored in your login keychain):") || die "no password entered (dialog cancelled or timed out)"
+    # security's interactive mode: the password is not on any command line
+    printf 'add-generic-password -a "%s" -s "%s" -l "RUG WebDAV backup (%s)" -j "read by %s" -T /usr/bin/security -U -w "%s"\n' \
+      "$(osa_esc "$WEBDAV_USER")" "$(osa_esc "$KEYCHAIN_SERVICE")" "$(osa_esc "$WEBDAV_USER")" "$(osa_esc "$SCRIPT_PATH")" "$(osa_esc "$pw")" \
+      | security -i >/dev/null 2>&1 || { unset pw; die "could not store the item (keychain locked? do this at the Mac itself)"; }
+    unset pw
+  else
+    security add-generic-password -a "$WEBDAV_USER" -s "$KEYCHAIN_SERVICE" -l "RUG WebDAV backup ($WEBDAV_USER)" \
+        -j "read by $SCRIPT_PATH" -T /usr/bin/security -U || die "could not store the item (keychain locked? try: security unlock-keychain)"
+  fi
   printf 'read-back without a prompt: '
   if security find-generic-password -s "$KEYCHAIN_SERVICE" -a "$WEBDAV_USER" -w >/dev/null 2>&1; then echo OK; else echo "FAILED — if a dialog asked for permission, choose 'Always Allow' and re-run setup"; fi
 }
@@ -1132,7 +1372,10 @@ case "${1:-help}" in
   check)     shift; cmd_check "$@" ;;
   status)    cmd_status ;;
   log)       shift; cmd_log "$@" ;;
-  setup)     cmd_setup ;;
+  setup)     shift; cmd_setup "$@" ;;
+  init)      shift; cmd_init "$@" ;;
+  wizard)    cmd_wizard ;;
+  wizard-finish) cmd_wizard_finish ;;
   install)   cmd_install ;;
   uninstall) cmd_uninstall ;;
   pause)     state_init; state_set paused 1; echo "scheduled runs paused (backup.sh resume to continue)" ;;
