@@ -877,6 +877,17 @@ conf_set_user() {   # rewrite WEBDAV_USER / WEBDAV_URL in the config (wizard: co
   done < "$CONF" > "$tmp"
   mv "$tmp" "$CONF"
 }
+conf_set_line() {   # conf_set_line KEY 'value as written': replace (or uncomment) the KEY= line of the config, keeping its comment
+  local key=$1 val=$2 tmp line cmt found=0; tmp=$(mktemp)
+  while IFS= read -r line; do
+    case "${line%%=*}" in
+      "$key"|"# $key") cmt=""; [[ "$line" == *"  #"* ]] && cmt="   #${line#*  #}"; echo "$key=$val$cmt"; found=1 ;;
+      *) echo "$line" ;;
+    esac
+  done < "$CONF" > "$tmp"
+  (( found )) || echo "$key=$val" >> "$tmp"
+  mv "$tmp" "$CONF"
+}
 conf_quote() { local s=${1//\\/\\\\}; s=${s//\"/\\\"}; s=${s//\$/\\\$}; printf '"%s"' "$s"; }
 machine_label() {   # the computer's name as a folder-name-safe word (default remote folder "<name>_Backup/<folder>")
   local n=""
@@ -934,6 +945,9 @@ plan_folders() {   # plan_folders <dir…> → PLAN_FOLDERS (cleaned), PLAN_LOCA
 }
 rules_file_for() {   # rules_file_for <conf> → path of its folder list (next to the config)
   local n; n=$(basename "$1"); n=${n%.conf}; printf '%s/%s-folders.txt' "$(dirname "$1")" "$n"
+}
+rules_name() {   # rules_name <"+ /X/**" rule…> → the automatic backup name "X, Y backup"
+  local r n=""; for r in "$@"; do r=${r#+ /}; r=${r%/\*\*}; n+="${n:+, }${r##*/}"; done; printf '%s backup' "$n"
 }
 write_rules() {   # write_rules <file> <rule…>
   local f=$1 n; n=$(basename "$1"); shift
@@ -1004,7 +1018,7 @@ cmd_init() {   # init --user a@rug.nl [--folder DIR]… [--remote-path P] [--hou
   mv "$tmp" "$CONF" || die "could not write $CONF"
   (( quiet )) && return 0
   local f
-  echo "wrote $CONF"
+  echo "wrote $(wpath "$CONF")"
   if (( ${#PLAN_RULES[@]} )); then
     echo "  folders:      $(printf '%s, ' "${PLAN_FOLDERS[@]}" | sed 's/, $//')"
     echo "                (backed up as parts of $PLAN_LOCAL; the list is in $rules)"
@@ -1022,8 +1036,9 @@ init_add() {   # init_add <quiet 0/1> <dir…>: extend a several-folder config w
   [[ -f "$CONF" ]] || die "init --add: no config yet ($CONF); run init without --add"
   [[ -n "$FILTER_FILE" && -f "$FILTER_FILE" ]] || die "init --add: $CONF backs up $LOCAL_DIR directly; another folder means a new layout on the server: run init --force with all folders (uploads again), or set up a second backup with -c <name>"
   (( $# )) || die "init --add needs --folder DIR"
-  local f c rel r dup line base=${LOCAL_DIR%/}; local -a rules=()
+  local f c rel r dup line base=${LOCAL_DIR%/} oldname newname; local -a rules=()
   while IFS= read -r line; do [[ "$line" == "+ "* ]] && rules+=("$line"); done < "$FILTER_FILE"
+  oldname=$(rules_name "${rules[@]}")
   for f in "$@"; do
     c=$(canon_dir "$f") || exit 2
     [[ "$c" == "$base"/* ]] || die "init --add: $c is outside $LOCAL_DIR; including it means a new layout on the server: run init --force with all folders (uploads again), or set up a second backup with -c <name>"
@@ -1032,6 +1047,8 @@ init_add() {   # init_add <quiet 0/1> <dir…>: extend a several-folder config w
     (( dup )) || rules+=("$rel")
   done
   write_rules "$FILTER_FILE" "${rules[@]}"
+  newname=$(rules_name "${rules[@]}")
+  [[ "$BACKUP_NAME" == "$oldname" && "$newname" != "$oldname" ]] && conf_set_line BACKUP_NAME "$(conf_quote "$newname")"   # an automatic name follows the list
   (( quiet )) && return 0
   echo "updated $FILTER_FILE: ${#rules[@]} folder(s) under $LOCAL_DIR"; printf '  %s\n' "${rules[@]}"
   for f in "$@"; do cloud_note "$(canon_dir "$f")"; done
