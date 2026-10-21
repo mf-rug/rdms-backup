@@ -7,11 +7,13 @@ schedule, with verification and versioning. README.md explains it; PORTING.md co
 
 Run the commands from this folder (macOS: `./backup.sh …`; Windows Git Bash: `bash backup.sh …`).
 
-1. Ask for two things only: their RUG address (name@rug.nl) and the folder to back up (default: Documents in the
-   local profile). Do not ask for the password.
-2. `./backup.sh init --user <address> --folder <folder>` writes backup.conf. Read its output: a ⚠ line means the
-   folder is inside OneDrive/iCloud/Dropbox; tell the user and ask whether to pick another folder (`init --force`
-   to rewrite).
+1. Ask for two things only: their RUG address (name@rug.nl) and the folder(s) to back up (default: Documents in
+   the local profile). Do not ask for the password.
+2. `./backup.sh init --user <address> --folder <folder>` writes backup.conf; several folders: repeat `--folder`
+   (they become one backup under their common parent; folders on different drives need separate setups with
+   `-c <name>`). Read its output: a ⚠ line means a folder is inside OneDrive/iCloud/Dropbox; tell the user and ask
+   whether to pick another folder (`init --force` to rewrite). Later additions: `init --add --folder <folder>`,
+   then `run --full`.
 3. `./backup.sh setup --gui` opens a password dialog on the user's screen. Tell the user to type the password into
    that dialog. Allow the tool call at least 10 minutes. You only see "stored: OK / connection test: OK" or a
    failure reason; on failure, check the address and let the user retry.

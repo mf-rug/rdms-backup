@@ -6,6 +6,7 @@ LOCAL_DIR="$HOME/Documents"              # the folder to back up — any folder 
                                          # Windows (Git Bash): use "$USERPROFILE/Documents" (or "C:/Users/<you>/Documents"), not $HOME:
                                          # on managed machines Git Bash HOME can be the network home drive (HOMEDRIVE, e.g. X:);
                                          # if Documents is redirected into OneDrive, pick a genuinely local folder instead
+# FILTER_FILE="$SCRIPT_DIR/backup-folders.txt"   # several folders: only these parts of LOCAL_DIR (rclone filter rules; init / the wizard write this file)
 # BACKUP_NAME="Documents backup"         # name in notifications/status; default "<folder name> backup"
 WEBDAV_URL="https://webdav.data.rug.nl/<your.name>@rug.nl"   # server + your home collection
 WEBDAV_USER="<your.name>@rug.nl"
