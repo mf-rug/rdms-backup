@@ -237,6 +237,7 @@ printf 'REMOTE_OVERRIDE="%s"\nSTATE_DIR="%s"\nLOG_DIR="%s"\nNOTIFY=false\n' "$T/
 BACKUP_CONF="$mc" bash "$SCRIPT" run >/dev/null 2>&1
 check "run uploads the chosen folders only"  [ -f "$T/multi-target/A/sub/a.txt" ] && [ -f "$T/multi-target/B/b.txt" ] && [ ! -e "$T/multi-target/C" ] && [ ! -e "$T/multi-target/top.txt" ]
 out=$(BACKUP_CONF="$mc" bash "$SCRIPT" init --add --folder "$M/C" 2>&1); check "init --add appends a folder" grep -qx '+ /C/\*\*' "$rules"
+check "automatic name follows the list"      grep -q '^BACKUP_NAME="A, B, C backup"' "$mc"
 out=$(BACKUP_CONF="$mc" bash "$SCRIPT" init --add --folder "$SRC" 2>&1); check "init --add refuses a folder outside the parent" grep -q 'outside' <<<"$out"
 BACKUP_CONF="$mc" bash "$SCRIPT" run --full >/dev/null 2>&1
 check "full run picks up the added folder"   [ -f "$T/multi-target/C/c.txt" ]
