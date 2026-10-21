@@ -8,3 +8,5 @@ old/
 .DS_Store
 # machine-specific notes
 *.local.md
+backup-folders.txt
+backup-*-folders.txt

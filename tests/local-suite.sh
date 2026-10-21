@@ -221,6 +221,27 @@ check "named config (-c trial): own task label"   grep -q '^LAUNCHD_LABEL="nl.ru
 check "named config: own state and log folders"  grep -q '^STATE_DIR=".*rugbackup-trial' "$nc" && grep -q '^LOG_DIR=".*rugbackup-trial' "$nc"
 check "named config: offset tick minute"         grep -q '^TICK_MINUTE=37' "$nc"
 
+echo "== 13. several folders: one config under the common parent with an include list; add a folder later"
+M="$T/multi"; mkdir -p "$M/A/sub" "$M/B" "$M/C"; printf 'a\n' > "$M/A/sub/a.txt"; printf 'b\n' > "$M/B/b.txt"; printf 'c\n' > "$M/C/c.txt"; printf 'top\n' > "$M/top.txt"
+mc="$T/backup-multi.conf"; rules="$T/backup-multi-folders.txt"
+out=$(BACKUP_CONF="$mc" bash "$SCRIPT" init --user "test.user@rug.nl" --folder "$M/A" --folder "$M/B" --folder "$M/A/sub" 2>&1); ec=$?
+check "init with several folders exits 0"   [ "$ec" -eq 0 ]
+mwant=$(cd "$M" && pwd -P); [[ "$OS" == windows ]] && mwant=$(cygpath -m "$mwant")
+check "LOCAL_DIR is the common parent"       grep -qF "LOCAL_DIR=\"$mwant\"" "$mc"
+check "include list next to the config"      [ -f "$rules" ] && grep -qx '+ /A/\*\*' "$rules" && grep -qx '+ /B/\*\*' "$rules" && grep -qx -- '- \*' "$rules"
+check "nested folder merged into its parent" test "$(grep -c '^+ ' "$rules")" -eq 2
+check "name lists the folders"               grep -q '^BACKUP_NAME="A, B backup"' "$mc"
+check "config points at the list"            grep -qF "FILTER_FILE=\"$rules\"" "$mc"
+mkdir -p "$T/multi-target"
+printf 'REMOTE_OVERRIDE="%s"\nSTATE_DIR="%s"\nLOG_DIR="%s"\nNOTIFY=false\n' "$T/multi-target" "$T/multi-state" "$T/multi-logs" >> "$mc"
+BACKUP_CONF="$mc" bash "$SCRIPT" run >/dev/null 2>&1
+check "run uploads the chosen folders only"  [ -f "$T/multi-target/A/sub/a.txt" ] && [ -f "$T/multi-target/B/b.txt" ] && [ ! -e "$T/multi-target/C" ] && [ ! -e "$T/multi-target/top.txt" ]
+out=$(BACKUP_CONF="$mc" bash "$SCRIPT" init --add --folder "$M/C" 2>&1); check "init --add appends a folder" grep -qx '+ /C/\*\*' "$rules"
+out=$(BACKUP_CONF="$mc" bash "$SCRIPT" init --add --folder "$SRC" 2>&1); check "init --add refuses a folder outside the parent" grep -q 'outside' <<<"$out"
+BACKUP_CONF="$mc" bash "$SCRIPT" run --full >/dev/null 2>&1
+check "full run picks up the added folder"   [ -f "$T/multi-target/C/c.txt" ]
+out=$(BACKUP_CONF="$ic" bash "$SCRIPT" init --add --folder "$SRC/Papers" 2>&1); check "init --add refuses on a one-folder config" grep -q 'directly' <<<"$out"
+
 echo
 echo "passed $PASS, failed $FAIL"
 (( FAIL == 0 ))

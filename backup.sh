@@ -8,8 +8,9 @@
 #   backup.sh status                      health summary + recent runs
 #   backup.sh log [N]                     digest of the latest (or N-th latest) run
 #   backup.sh wizard                      guided setup with a few dialogs (what Setup.command / Setup.cmd run)
-#   backup.sh init --user a@rug.nl [--folder DIR] [--remote-path P] [--hours "3 11 15 19"] [--name N] [--force]
-#                                         write backup.conf without any prompt (scripts, or a Claude doing the setup)
+#   backup.sh init --user a@rug.nl [--folder DIR]… [--remote-path P] [--hours "3 11 15 19"] [--name N] [--force]
+#                                         write backup.conf without any prompt (scripts, or a Claude doing the setup);
+#                                         several --folder: one backup under their common parent. init --add --folder DIR extends it
 #   backup.sh setup [--gui]               store the WebDAV password (keychain / DPAPI file), test the connection;
 #                                         --gui, or no terminal: the password is typed into a dialog, never passed in
 #   backup.sh install | uninstall         create / remove the launchd agent
@@ -160,7 +161,7 @@ require() {
     die "missing dependency: $c ($hint)"
   done
 }
-usage()   { sed -n '2,26p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'; }
+usage()   { sed -n '2,27p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'; }
 
 # ----------------------------------------------------------------------------- OS layer: dates, small tools, PowerShell
 if [[ "$OS" == windows ]]; then
@@ -289,14 +290,14 @@ gui_ask() {   # gui_ask <prompt> <default> → text; 1 on cancel/empty/timeout
   [[ -n "$out" ]] || return 1
   printf '%s' "$out"
 }
-gui_folder() {   # gui_folder <prompt> <default dir> → chosen folder (C:/… on Windows); 1 on cancel/timeout
+gui_folders() {   # gui_folders <prompt> <default dir> → chosen folders, one per line (macOS: several at once with Cmd-click); 1 on cancel/timeout
   local def=$2 out; [[ -d "$def" ]] || def=$HOME
   if [[ "$OS" == windows ]]; then
     out=$(BK_MSG="$1" BK_DEF="$(cygpath -w "$def")" ps_gui 1800 "$PS_FOLDER" | tr -d '\r') || return 1
     [[ -n "$out" ]] || return 1; cygpath -m "$out"
   else
-    out=$(osa_run 1800 "POSIX path of (choose folder with prompt \"$(osa_esc "$1")\" default location (POSIX file \"$(osa_esc "$def")\"))") || return 1
-    [[ -n "$out" ]] || return 1; printf '%s' "${out%/}"
+    out=$(osa_run 1800 'set out to ""' "repeat with f in (choose folder with prompt \"$(osa_esc "$1")\" default location (POSIX file \"$(osa_esc "$def")\") with multiple selections allowed)" 'set out to out & POSIX path of f & linefeed' 'end repeat' 'return out') || return 1
+    printf '%s\n' "$out" | sed 's#/$##' | grep .
   fi
 }
 osa_pw() {   # one masked AppleScript field → text; 1 on cancel/timeout
@@ -884,32 +885,90 @@ machine_label() {   # the computer's name as a folder-name-safe word (default re
   n=${n//\'/}; n=$(printf '%s' "$n" | tr -c 'A-Za-z0-9_-' '_' | tr -s '_'); n=${n#_}; n=${n%_}
   printf '%s' "${n:-Computer}"
 }
-cmd_init() {   # init --user a@rug.nl [--folder DIR] [--remote-path P] [--hours "3 11 15 19"] [--name N] [--force] [--quiet]
-  local user="" folder="" rpath="" hours="" name="" force=0 quiet=0
+# ----------------------------------------------------------------------------- several folders: one config under their common parent
+# One folder: LOCAL_DIR is that folder. Several: LOCAL_DIR is their deepest common parent and FILTER_FILE (backup-folders.txt
+# next to the config) holds one "+ /name/**" rule per folder and "- *"; rclone then never enters the other directories.
+filter_escape() { local s=${1//\\/\\\\}; s=${s//\*/\\*}; s=${s//\?/\\?}; s=${s//\[/\\[}; s=${s//\]/\\]}; s=${s//\{/\\\{}; s=${s//\}/\\\}}; printf '%s' "$s"; }
+canon_dir() {   # canon_dir <dir> → absolute, symlink-free, OS-native form; dies if missing
+  local f=$1; [[ "$f" == "~"* ]] && f="$HOME${f#\~}"
+  [[ -d "$f" ]] || die "folder not found: $f"
+  f=$(wpath "$(cd "$f" && pwd -P)"); f=${f%/}; [[ -n "$f" ]] || f=/
+  printf '%s' "$f"
+}
+common_parent() {   # common_parent <dir…> → deepest common directory; 1 when there is none (different drives)
+  local IFS='/'; local -a a b; local p n
+  read -r -a a <<<"$1"
+  for p in "$@"; do
+    read -r -a b <<<"$p"; n=0
+    while (( n < ${#a[@]} && n < ${#b[@]} )) && [[ "${a[n]}" == "${b[n]}" ]]; do n=$((n+1)); done
+    a=("${a[@]:0:n}")
+  done
+  if [[ "$OS" == windows ]]; then [[ -n "${a[0]:-}" && "${a[0]}" =~ ^[A-Za-z]:$ ]] || return 1; fi
+  p="${a[*]}"; [[ -n "$p" ]] || p=/; [[ "$p" =~ ^[A-Za-z]:$ ]] && p="$p/"
+  printf '%s' "$p"
+}
+PLAN_LOCAL=""; PLAN_RPATH=""; PLAN_NAME=""; PLAN_RULES=(); PLAN_FOLDERS=()
+plan_folders() {   # plan_folders <dir…> → PLAN_FOLDERS (cleaned), PLAN_LOCAL, PLAN_RULES (empty for one folder), PLAN_RPATH, PLAN_NAME
+  local -a fs=() keep=(); local f g c inside dup anc label
+  for f in "$@"; do c=$(canon_dir "$f") || exit 2; fs+=("$c"); done
+  for f in "${fs[@]}"; do   # drop duplicates and folders that lie inside another chosen folder
+    inside=0; dup=0
+    for g in "${fs[@]}"; do [[ "$g" != "$f" && "$f" == "${g%/}"/* ]] && inside=1; done
+    for g in "${keep[@]}"; do [[ "$g" == "$f" ]] && dup=1; done
+    (( inside || dup )) || keep+=("$f")
+  done
+  PLAN_FOLDERS=("${keep[@]}"); PLAN_RULES=(); PLAN_NAME=""
+  if (( ${#keep[@]} == 1 )); then
+    PLAN_LOCAL=${keep[0]}; label=$(basename "$PLAN_LOCAL")
+  else
+    anc=$(common_parent "${keep[@]}") || die "the folders must lie on the same drive (one backup per drive; a second one: backup.sh -c <name> wizard)"
+    PLAN_LOCAL=$anc
+    for f in "${keep[@]}"; do PLAN_RULES+=("+ /$(filter_escape "${f#"${anc%/}"/}")/**"); done
+    if [[ "$anc" == "$(wpath "$HOME")" ]] || [[ "$OS" == windows && -n "${USERPROFILE:-}" && "$anc" == "$(wpath "$USERPROFILE")" ]]; then label=Home
+    elif [[ "$anc" == / ]]; then label=Root
+    elif [[ "$anc" =~ ^([A-Za-z]):/$ ]]; then label="Drive_${BASH_REMATCH[1]}"
+    else label=$(basename "$anc"); fi
+    PLAN_NAME=$(printf '%s, ' "${keep[@]##*/}"); PLAN_NAME="${PLAN_NAME%, } backup"
+  fi
+  PLAN_RPATH="$(machine_label)_Backup/$label"; PLAN_RPATH=${PLAN_RPATH// /_}
+}
+rules_file_for() {   # rules_file_for <conf> → path of its folder list (next to the config)
+  local n; n=$(basename "$1"); n=${n%.conf}; printf '%s/%s-folders.txt' "$(dirname "$1")" "$n"
+}
+write_rules() {   # write_rules <file> <rule…>
+  local f=$1 n; n=$(basename "$1"); shift
+  { echo "# $n — written by backup.sh init / the wizard: the folders this backup covers (rclone filter rules, relative to LOCAL_DIR)"
+    printf '%s\n' "$@"; echo "- *"; } > "$f"
+}
+cloud_note() { local croot; if croot=$(cloud_root_of "$1"); then echo "  ⚠ $1 is inside a cloud-synced location ($croot): online-only files would be downloaded by every run; prefer a folder that exists only on this computer"; fi; }
+
+cmd_init() {   # init --user a@rug.nl [--folder DIR]… [--remote-path P] [--hours "3 11 15 19"] [--name N] [--force] [--quiet]   |   init --add --folder DIR…
+  local user="" rpath="" hours="" name="" force=0 add=0 quiet=0; local -a folders=()
   while (( $# )); do
     case "$1" in
-      --user) user=${2:-}; shift 2 ;;        --folder) folder=${2:-}; shift 2 ;;
-      --remote-path) rpath=${2:-}; shift 2 ;; --hours) hours=${2:-}; shift 2 ;;
-      --name) name=${2:-}; shift 2 ;;        --force) force=1; shift ;;   --quiet) quiet=1; shift ;;
+      --user) user=${2:-}; shift 2 ;;            --folder) folders+=("${2:-}"); shift 2 ;;
+      --remote-path) rpath=${2:-}; shift 2 ;;    --hours) hours=${2:-}; shift 2 ;;
+      --name) name=${2:-}; shift 2 ;;            --force) force=1; shift ;;
+      --add) add=1; shift ;;                     --quiet) quiet=1; shift ;;
       --password|--password=*) die "init never takes a password: run 'backup.sh setup' afterwards and type it into the prompt or dialog" ;;
-      *) die "init: unknown option '$1' (init --user a@rug.nl [--folder DIR] [--remote-path P] [--hours \"3 11 15 19\"] [--name N] [--force])" ;;
+      *) die "init: unknown option '$1' (init --user a@rug.nl [--folder DIR]… [--remote-path P] [--hours \"3 11 15 19\"] [--name N] [--force] | init --add --folder DIR…)" ;;
     esac
   done
-  [[ -f "$CONF" && $force == 0 ]] && die "config exists: $CONF (edit it, or: init --force to replace it)"
+  if (( add )); then init_add "$quiet" "${folders[@]}"; return; fi
+  [[ -f "$CONF" && $force == 0 ]] && die "config exists: $CONF (edit it, init --force to replace it, or init --add --folder DIR to extend a several-folder setup)"
   is_rug_address "$user" || die "init: --user must be your RUG address (name@rug.nl), got '${user:-nothing}'"
-  [[ -n "$folder" ]] || folder=$LOCAL_DIR
-  [[ "$folder" == "~"* ]] && folder="$HOME${folder#\~}"
-  [[ -d "$folder" ]] || die "init: folder not found: $folder"
-  folder=$(wpath "$(cd "$folder" && pwd -P)")
-  if [[ -z "$rpath" ]]; then rpath="$(machine_label)_Backup/$(basename "$folder")"; rpath=${rpath// /_}; fi
+  (( ${#folders[@]} )) || folders=("$LOCAL_DIR")
+  plan_folders "${folders[@]}"
+  [[ -n "$rpath" ]] || rpath=$PLAN_RPATH
   rpath=${rpath#/}; rpath=${rpath%/}; [[ -n "$rpath" ]] || die "init: --remote-path is empty"
+  [[ -n "$name" ]] || name=$PLAN_NAME
   [[ -n "$hours" ]] || hours="3 11 15 19"
   local -a hs=(); local h
   for h in $hours; do
     if ! { [[ "$h" =~ ^[0-9]{1,2}$ ]] && (( 10#$h < 24 )); }; then die "init: --hours wants hours 0-23 separated by spaces, got '$hours'"; fi
     hs+=("$((10#$h))")
   done
-  local main=${hs[0]} rest="${hs[*]:1}" example="$SCRIPT_DIR/backup.conf.example" tmp line key cmt croot="" cname="" sd="" ld=""
+  local main=${hs[0]} rest="${hs[*]:1}" example="$SCRIPT_DIR/backup.conf.example" tmp line key cmt cname="" sd="" ld="" rules="" rules_conf=""
   [[ -f "$example" ]] || die "missing $example"
   # a second config (backup-<name>.conf, used with -c <name>) needs its own scheduler job, state and logs
   [[ "$(basename "$CONF")" =~ ^backup-(.+)\.conf$ ]] && cname=${BASH_REMATCH[1]}
@@ -917,13 +976,17 @@ cmd_init() {   # init --user a@rug.nl [--folder DIR] [--remote-path P] [--hours 
     if [[ "$OS" == windows ]]; then sd="$(cygpath -m "$LOCALAPPDATA")/rugbackup-$cname/state"; ld="$(cygpath -m "$LOCALAPPDATA")/rugbackup-$cname/logs"
     else sd="\$HOME/Library/Application Support/rugbackup-$cname"; ld="\$HOME/Library/Logs/rugbackup-$cname"; fi
   fi
-  croot=$(cloud_root_of "$folder") || true
+  if (( ${#PLAN_RULES[@]} )); then
+    rules=$(rules_file_for "$CONF"); write_rules "$rules" "${PLAN_RULES[@]}"
+    if [[ "$(dirname "$rules")" == "$SCRIPT_DIR" ]]; then rules_conf="\$SCRIPT_DIR/$(basename "$rules")"; else rules_conf=$rules; fi
+  fi
   tmp=$(mktemp)
   { echo "# backup.conf — written by 'backup.sh init' on $(ts). Everything not set here keeps the defaults explained below."
     while IFS= read -r line; do
       key=${line%%=*}; cmt=""; [[ "$line" == *"  #"* ]] && cmt="   #${line#*  #}"
       case "$key" in
-        LOCAL_DIR)        echo "LOCAL_DIR=$(conf_quote "$folder")$cmt" ;;
+        LOCAL_DIR)        echo "LOCAL_DIR=$(conf_quote "$PLAN_LOCAL")$cmt" ;;
+        "# FILTER_FILE")  if [[ -n "$rules_conf" ]]; then echo "FILTER_FILE=\"$rules_conf\"$cmt"; else echo "$line"; fi ;;
         "# BACKUP_NAME")  if [[ -n "$name" ]]; then echo "BACKUP_NAME=$(conf_quote "$name")$cmt"; else echo "$line"; fi ;;
         WEBDAV_URL)       echo "WEBDAV_URL=\"https://webdav.data.rug.nl/$user\"$cmt" ;;
         WEBDAV_USER)      echo "WEBDAV_USER=\"$user\"" ;;
@@ -940,48 +1003,104 @@ cmd_init() {   # init --user a@rug.nl [--folder DIR] [--remote-path P] [--hours 
   } > "$tmp"
   mv "$tmp" "$CONF" || die "could not write $CONF"
   (( quiet )) && return 0
+  local f
   echo "wrote $CONF"
-  echo "  folder:       $folder"
-  [[ -n "$croot" ]] && echo "  ⚠ inside a cloud-synced location ($croot): online-only files would be downloaded by every run; prefer a folder that exists only on this computer"
+  if (( ${#PLAN_RULES[@]} )); then
+    echo "  folders:      $(printf '%s, ' "${PLAN_FOLDERS[@]}" | sed 's/, $//')"
+    echo "                (backed up as parts of $PLAN_LOCAL; the list is in $rules)"
+  else
+    echo "  folder:       $PLAN_LOCAL"
+  fi
+  for f in "${PLAN_FOLDERS[@]}"; do cloud_note "$f"; done
   echo "  account:      $user"
   echo "  on server:    $rpath   (below https://webdav.data.rug.nl/$user)"
   echo "  runs at:      ${hs[*]}h  (main slot ${main}h: weekly full pass + daily notification)"
   echo "next: backup.sh setup     (the password; then: run --dry-run --full, run --full, install)"
+}
+init_add() {   # init_add <quiet 0/1> <dir…>: extend a several-folder config with folders inside its LOCAL_DIR
+  local quiet=$1; shift
+  [[ -f "$CONF" ]] || die "init --add: no config yet ($CONF); run init without --add"
+  [[ -n "$FILTER_FILE" && -f "$FILTER_FILE" ]] || die "init --add: $CONF backs up $LOCAL_DIR directly; another folder means a new layout on the server: run init --force with all folders (uploads again), or set up a second backup with -c <name>"
+  (( $# )) || die "init --add needs --folder DIR"
+  local f c rel r dup line base=${LOCAL_DIR%/}; local -a rules=()
+  while IFS= read -r line; do [[ "$line" == "+ "* ]] && rules+=("$line"); done < "$FILTER_FILE"
+  for f in "$@"; do
+    c=$(canon_dir "$f") || exit 2
+    [[ "$c" == "$base"/* ]] || die "init --add: $c is outside $LOCAL_DIR; including it means a new layout on the server: run init --force with all folders (uploads again), or set up a second backup with -c <name>"
+    rel="+ /$(filter_escape "${c#"$base"/}")/**"; dup=0
+    for r in "${rules[@]}"; do [[ "$r" == "$rel" ]] && dup=1; done
+    (( dup )) || rules+=("$rel")
+  done
+  write_rules "$FILTER_FILE" "${rules[@]}"
+  (( quiet )) && return 0
+  echo "updated $FILTER_FILE: ${#rules[@]} folder(s) under $LOCAL_DIR"; printf '  %s\n' "${rules[@]}"
+  for f in "$@"; do cloud_note "$(canon_dir "$f")"; done
+  echo "next: backup.sh run --full   (a new folder is only picked up by a full pass; the wizard starts one for you)"
 }
 
 scheduler_kick() {   # start the hourly job now (first run after the wizard)
   if [[ "$OS" == windows ]]; then schtasks.exe /Run /TN "$LAUNCHD_LABEL" >/dev/null 2>&1
   else launchctl kickstart "gui/$(id -u)/$LAUNCHD_LABEL" >/dev/null 2>&1; fi
 }
-cmd_wizard() {   # guided setup: dependencies, address, folder, summary → config → (second phase) password, test, install, first run
+wizard_pick_folders() {   # wizard_pick_folders <prompt> <must-be-inside or ""> → WIZ_FOLDERS; exit 0 when nothing was chosen
+  local prompt=$1 base=${2%/} picked f croot; WIZ_FOLDERS=()
+  [[ "$OS" == mac ]] && prompt+=" (Cmd-click selects several)"
+  while :; do
+    picked=$(gui_folders "$prompt" "${2:-$LOCAL_DIR}") || { gui_failed; (( ${#WIZ_FOLDERS[@]} )) && break; exit 0; }
+    while IFS= read -r f; do
+      [[ -n "$f" ]] || continue
+      if [[ -n "$base" && "$f" != "$base"/* ]]; then
+        gui_alert "$f"$'\n\n'"is outside $base and cannot be added to this backup. Including it means a new layout on the server: start the setup over (uploads again), or set up a second backup with 'backup.sh -c <name> wizard'." ok || gui_failed
+        continue
+      fi
+      if croot=$(cloud_root_of "$f"); then
+        gui_alert "$f"$'\n\n'"lies inside a cloud-synced location ($croot). Files that exist only in the cloud would be downloaded by every run, and files already in the cloud gain little from a second copy."$'\n\n'"Yes: use it anyway."$'\n'"No: leave it out." yesno || { gui_failed; continue; }
+      fi
+      WIZ_FOLDERS+=("$f")
+    done <<<"$picked"
+    (( ${#WIZ_FOLDERS[@]} )) || continue
+    gui_alert "Chosen so far:"$'\n'"$(printf '  %s\n' "${WIZ_FOLDERS[@]}")"$'\n'"Add another folder?" yesno || { gui_failed; break; }
+  done
+}
+WIZ_FOLDERS=()
+cmd_wizard() {   # guided setup: dependencies, address, folders, summary → config → (second phase) password, test, install, first run
   [[ "$OS" == mac && -n "${SSH_CONNECTION:-}" ]] && die "the wizard needs the Mac's own screen: double-click Setup.command on the Mac, or: backup.sh gui-run --wait wizard"
-  local -a missing=(); local c hint user folder rpath croot
+  local -a missing=() fa=(); local c hint user f
   for c in rclone jq; do have "$c" || missing+=("$c"); done; find_python || missing+=(python3)
   if (( ${#missing[@]} )); then
     if [[ "$OS" == windows ]]; then hint="winget install Rclone.Rclone jqlang.jq Python.Python.3.12"; else hint="brew install rclone jq"; fi
     gui_alert "Missing on this computer: ${missing[*]}."$'\n\n'"Install them first: paste this line into a terminal:"$'\n\n'"$hint"$'\n\n'"Then start the setup again." ok; exit 2
   fi
   if [[ -f "$CONF" ]]; then
-    gui_alert "A configuration already exists:"$'\n'"$CONF"$'\n\n'"Yes: start over and replace it."$'\n'"No: keep it and stop." yesno || { gui_failed; exit 0; }
+    if [[ -n "$FILTER_FILE" && -f "$FILTER_FILE" ]]; then
+      if gui_alert "A backup is already set up: $BACKUP_NAME ($LOCAL_DIR → $REMOTE)."$'\n\n'"Yes: add folders to it."$'\n'"No: replace it and start over." yesno; then wizard_add_folders; return; fi
+      gui_failed
+    else
+      gui_alert "A backup is already set up: $LOCAL_DIR → $REMOTE."$'\n\n'"Yes: replace it and start over (a different folder choice means the backup moves to a new place on the server and uploads again)."$'\n'"No: keep it and stop." yesno || { gui_failed; exit 0; }
+    fi
   fi
-  gui_alert "This sets up an automatic backup of one folder to your RUG research storage (RDMS)."$'\n\n'"It runs by itself at 3, 11, 15 and 19 h, keeps earlier versions of changed files for 90 days, checks after every run that everything arrived, and tells you when something is wrong."$'\n\n'"You will be asked for your RUG address, the folder, and your password (typed into a window; stored only on this computer)." okcancel || { gui_failed; exit 0; }
+  gui_alert "This sets up an automatic backup of one or more folders to your RUG research storage (RDMS)."$'\n\n'"It runs by itself at 3, 11, 15 and 19 h, keeps earlier versions of changed files for 90 days, checks after every run that everything arrived, and tells you when something is wrong."$'\n\n'"You will be asked for your RUG address, the folder(s), and your password (typed into a window; stored only on this computer)." okcancel || { gui_failed; exit 0; }
   user="@rug.nl"
   while :; do
     user=$(gui_ask "Your RUG address (name@rug.nl):" "$user") || { gui_failed; exit 0; }; user=${user//[[:space:]]/}
     is_rug_address "$user" && break
     gui_alert "'$user' does not look like a RUG address (expected name@rug.nl)." ok || { gui_failed; exit 0; }
   done
-  while :; do
-    folder=$(gui_folder "Choose the folder to back up (your Documents folder is a good choice)" "$LOCAL_DIR") || { gui_failed; exit 0; }
-    if croot=$(cloud_root_of "$folder"); then
-      gui_alert "$folder"$'\n\n'"lies inside a cloud-synced location ($croot). Files that exist only in the cloud would be downloaded by every run, and files already in the cloud gain little from a second copy."$'\n\n'"Yes: use it anyway."$'\n'"No: pick another folder." yesno || { gui_failed; continue; }
-    fi
-    break
-  done
-  rpath="$(machine_label)_Backup/$(basename "$folder")"; rpath=${rpath// /_}
-  gui_alert "Folder:   $folder"$'\n'"Account:  $user"$'\n'"On the server:  $rpath"$'\n'"Runs at:  3, 11, 15, 19 h"$'\n\n'"Continue? Next comes your password." okcancel || { gui_failed; exit 0; }
-  cmd_init --user "$user" --folder "$folder" --remote-path "$rpath" --force --quiet || { gui_alert "Could not write the configuration ($CONF). See the terminal window for details." ok; exit 2; }
+  wizard_pick_folders "Choose the folder to back up (Documents is the usual choice)" ""
+  plan_folders "${WIZ_FOLDERS[@]}"
+  gui_alert "$( (( ${#PLAN_FOLDERS[@]} > 1 )) && echo "Folders:" || echo "Folder:")"$'\n'"$(printf '  %s\n' "${PLAN_FOLDERS[@]}")"$'\n'"Account:  $user"$'\n'"On the server:  $PLAN_RPATH"$'\n'"Runs at:  3, 11, 15, 19 h"$'\n\n'"Continue? Next comes your password." okcancel || { gui_failed; exit 0; }
+  for f in "${PLAN_FOLDERS[@]}"; do fa+=(--folder "$f"); done
+  cmd_init --user "$user" "${fa[@]}" --remote-path "$PLAN_RPATH" --force --quiet || { gui_alert "Could not write the configuration ($CONF). See the terminal window for details." ok; exit 2; }
   BACKUP_CONF="$CONF" exec "$BASH" "$SCRIPT_PATH" wizard-finish   # re-read the new config
+}
+wizard_add_folders() {   # add folders (inside LOCAL_DIR) to a several-folder setup, then start a full pass
+  local f; local -a fa=()
+  wizard_pick_folders "Choose a folder to add (inside $LOCAL_DIR)" "$LOCAL_DIR"
+  for f in "${WIZ_FOLDERS[@]}"; do fa+=(--folder "$f"); done
+  cmd_init --add --quiet "${fa[@]}" || { gui_alert "Could not update the folder list. See the terminal window for details." ok; exit 2; }
+  state_init; state_set last_attempt_epoch 0 last_full_success_epoch 0
+  scheduler_loaded && scheduler_kick
+  gui_alert "Added:"$'\n'"$(printf '  %s\n' "${WIZ_FOLDERS[@]}")"$'\n'"A full pass starts now in the background to pick them up." ok
 }
 cmd_wizard_finish() {   # second phase of the wizard, with the new config loaded
   local tries=0
