@@ -218,9 +218,16 @@ cloud_only_count() {   # cloud_only_count <dir> <seconds> → "N", "N+" (scan hi
 # on the command line. Every dialog gives up after a while, so an unattended call cannot hang forever. Return 1 =
 # cancelled / No / timed out. The password dialog's text goes nowhere but into the keychain / DPAPI file.
 GUI_TITLE="RDMS backup"
-osa_run() {   # osa_run <timeout s> <applescript line…>  (inside "tell application System Events", brought to front)
-  local t=$1; shift; local -a a=(); local l; for l in "$@"; do a+=(-e "$l"); done
-  tmo "$t" osascript -e 'tell application "System Events"' -e 'activate' "${a[@]}" -e 'end tell' 2>/dev/null
+GUI_FAIL="${TMPDIR:-/tmp}/rugbackup-gui-fail-$$"   # marker: a dialog could not be shown (set inside $(…), read by gui_failed)
+gui_failed() { [[ -e "$GUI_FAIL" ]] && { rm -f "$GUI_FAIL"; exit 2; }; return 0; }
+osa_run() {   # osa_run <timeout s> <applescript line…>  (inside "tell application System Events", brought to front); 1 = cancelled/timed out
+  local t=$1; shift; local -a a=(); local l err ec msg; for l in "$@"; do a+=(-e "$l"); done
+  err=$(mktemp)
+  if tmo "$t" osascript -e 'tell application "System Events"' -e 'activate' "${a[@]}" -e 'end tell' 2>"$err"; then rm -f "$err"; return 0; else ec=$?; fi
+  msg=$(tr -d '\n' < "$err" | cut -c1-300); rm -f "$err"
+  (( ec == 124 )) && { echo "dialog timed out" >&2; return 1; }
+  [[ "$msg" == *"User canceled"* || "$msg" == *"-128"* ]] && return 1
+  : > "$GUI_FAIL"; die "could not show a dialog: ${msg:-osascript exit $ec}"
 }
 # shellcheck disable=SC2016   # PowerShell code: $ is PowerShell's
 PS_ALERT='Add-Type -AssemblyName System.Windows.Forms
@@ -235,20 +242,29 @@ PS_ASK='Add-Type -AssemblyName Microsoft.VisualBasic
 PS_FOLDER='Add-Type -AssemblyName System.Windows.Forms
   $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = $env:BK_MSG; $d.ShowNewFolderButton = $false
   if ($env:BK_DEF) { $d.SelectedPath = $env:BK_DEF }
-  if ($d.ShowDialog() -ne "OK") { exit 1 }
+  if ($d.ShowDialog() -ne "OK") { exit 3 }
   $b = [Text.Encoding]::UTF8.GetBytes($d.SelectedPath); $o = [Console]::OpenStandardOutput(); $o.Write($b, 0, $b.Length); $o.Flush()'
 # shellcheck disable=SC2016
 PS_PW_DIALOG='$ErrorActionPreference="Stop"; Add-Type -AssemblyName System.Windows.Forms
-  $f = New-Object Windows.Forms.Form; $f.Text = $env:BK_TITLE; $f.Width = 440; $f.Height = 175; $f.StartPosition = "CenterScreen"
+  $f = New-Object Windows.Forms.Form; $f.Text = $env:BK_TITLE; $f.Width = 440; $f.Height = 240; $f.StartPosition = "CenterScreen"
   $f.TopMost = $true; $f.FormBorderStyle = "FixedDialog"; $f.MaximizeBox = $false; $f.MinimizeBox = $false
   $l = New-Object Windows.Forms.Label; $l.Text = $env:BK_MSG; $l.SetBounds(12, 12, 400, 44); $f.Controls.Add($l)
   $t = New-Object Windows.Forms.TextBox; $t.UseSystemPasswordChar = $true; $t.SetBounds(12, 60, 400, 24); $f.Controls.Add($t)
-  $ok = New-Object Windows.Forms.Button; $ok.Text = "OK"; $ok.DialogResult = "OK"; $ok.SetBounds(246, 98, 80, 28); $f.Controls.Add($ok); $f.AcceptButton = $ok
-  $c = New-Object Windows.Forms.Button; $c.Text = "Cancel"; $c.DialogResult = "Cancel"; $c.SetBounds(332, 98, 80, 28); $f.Controls.Add($c); $f.CancelButton = $c
-  $f.Add_Shown({ $t.Focus() })
-  if ($f.ShowDialog() -ne "OK") { exit 1 }
+  $l2 = New-Object Windows.Forms.Label; $l2.Text = "Once more, to rule out a typo:"; $l2.SetBounds(12, 94, 400, 20); $f.Controls.Add($l2)
+  $t2 = New-Object Windows.Forms.TextBox; $t2.UseSystemPasswordChar = $true; $t2.SetBounds(12, 116, 400, 24); $f.Controls.Add($t2)
+  $ok = New-Object Windows.Forms.Button; $ok.Text = "OK"; $ok.SetBounds(246, 160, 80, 28); $f.Controls.Add($ok); $f.AcceptButton = $ok
+  $c = New-Object Windows.Forms.Button; $c.Text = "Cancel"; $c.DialogResult = "Cancel"; $c.SetBounds(332, 160, 80, 28); $f.Controls.Add($c); $f.CancelButton = $c
+  $ok.Add_Click({ if ($t.Text.Length -eq 0) { return }
+    if ($t.Text -ne $t2.Text) { [void][Windows.Forms.MessageBox]::Show("The two entries differ.", $env:BK_TITLE); $t2.Text = ""; $t2.Focus(); return }
+    $f.DialogResult = "OK"; $f.Close() })
+  $f.Add_Shown({ $f.Activate(); $t.Focus() })
+  if ($f.ShowDialog() -ne "OK") { exit 3 }
   $b = [Text.Encoding]::UTF8.GetBytes($t.Text); $o = [Console]::OpenStandardOutput(); $o.Write($b, 0, $b.Length); $o.Flush()'
-ps_gui() { tmo "$1" powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -STA -Command "$2" </dev/null 2>/dev/null; }
+ps_gui() {   # ps_gui <timeout s> <powershell code>; the snippets exit 3 for Cancel; 1 = cancelled/timed out
+  local ec; tmo "$1" powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -STA -Command "$2" </dev/null 2>/dev/null; ec=$?
+  case $ec in 0) return 0 ;; 3) return 1 ;; 124) echo "dialog timed out" >&2; return 1 ;; esac
+  : > "$GUI_FAIL"; die "could not show a dialog (PowerShell exit $ec)"
+}
 gui_alert() {   # gui_alert <text> [ok|okcancel|yesno] → 0 for OK/Yes, 1 for Cancel/No/timeout
   local text=$1 kind=${2:-ok} out btn
   if [[ "$OS" == windows ]]; then
@@ -283,17 +299,25 @@ gui_folder() {   # gui_folder <prompt> <default dir> → chosen folder (C:/… o
     [[ -n "$out" ]] || return 1; printf '%s' "${out%/}"
   fi
 }
-pw_dialog() {   # pw_dialog <prompt> → the typed text; 1 on cancel/empty/timeout (10 min). Masked field, nothing logged.
-  local out
+osa_pw() {   # one masked AppleScript field → text; 1 on cancel/timeout
+  local out; out=$(osa_run 600 "display dialog \"$(osa_esc "$1")\" default answer \"\" with hidden answer with title \"$(osa_esc "$GUI_TITLE")\" buttons {\"Cancel\", \"OK\"} default button \"OK\" giving up after 590") || return 1
+  [[ "$out" == *"gave up:true"* ]] && return 1
+  out=${out%, gave up:*}; printf '%s' "${out#*text returned:}"
+}
+pw_dialog() {   # pw_dialog <prompt> → the text, typed twice identically; 1 on cancel/empty/timeout. Masked fields, nothing logged.
+  local a b tries=0
   if [[ "$OS" == windows ]]; then
-    out=$(BK_TITLE="$GUI_TITLE" BK_MSG="$1" ps_gui 600 "$PS_PW_DIALOG") || return 1
-  else
-    out=$(osa_run 600 "display dialog \"$(osa_esc "$1")\" default answer \"\" with hidden answer with title \"$(osa_esc "$GUI_TITLE")\" buttons {\"Cancel\", \"OK\"} default button \"OK\" giving up after 590") || return 1
-    [[ "$out" == *"gave up:true"* ]] && return 1
-    out=${out%, gave up:*}; out=${out#*text returned:}
+    a=$(BK_TITLE="$GUI_TITLE" BK_MSG="$1" ps_gui 600 "$PS_PW_DIALOG") || { gui_failed; return 1; }   # the form confirms by itself
+    [[ -n "$a" ]] || return 1; printf '%s' "$a"; return 0
   fi
-  [[ -n "$out" ]] || return 1
-  printf '%s' "$out"
+  while (( tries < 3 )); do
+    tries=$((tries+1))
+    a=$(osa_pw "$1") || { gui_failed; return 1; }; [[ -n "$a" ]] || return 1
+    b=$(osa_pw "Once more, to rule out a typo:") || { gui_failed; return 1; }
+    [[ "$a" == "$b" ]] && { printf '%s' "$a"; return 0; }
+    gui_alert "The two entries differ. Try again." ok || return 1
+  done
+  return 1
 }
 
 RUN_DIR=""; RUN_LOG=""
@@ -840,6 +864,18 @@ cmd_log() {
 }
 
 # ----------------------------------------------------------------------------- init (no prompts) and wizard (dialogs)
+is_rug_address() { [[ "$1" =~ ^[A-Za-z0-9._%+-]*[A-Za-z0-9_%+-]@rug\.nl$ ]]; }   # name@rug.nl, no dot right before the @
+conf_set_user() {   # rewrite WEBDAV_USER / WEBDAV_URL in the config (wizard: correcting a mistyped address)
+  local u=$1 tmp line; tmp=$(mktemp)
+  while IFS= read -r line; do
+    case "${line%%=*}" in
+      WEBDAV_URL)  echo "WEBDAV_URL=\"https://webdav.data.rug.nl/$u\"${line#*\"*\"}" ;;
+      WEBDAV_USER) echo "WEBDAV_USER=\"$u\"" ;;
+      *) echo "$line" ;;
+    esac
+  done < "$CONF" > "$tmp"
+  mv "$tmp" "$CONF"
+}
 conf_quote() { local s=${1//\\/\\\\}; s=${s//\"/\\\"}; s=${s//\$/\\\$}; printf '"%s"' "$s"; }
 machine_label() {   # the computer's name as a folder-name-safe word (default remote folder "<name>_Backup/<folder>")
   local n=""
@@ -860,7 +896,7 @@ cmd_init() {   # init --user a@rug.nl [--folder DIR] [--remote-path P] [--hours 
     esac
   done
   [[ -f "$CONF" && $force == 0 ]] && die "config exists: $CONF (edit it, or: init --force to replace it)"
-  [[ "$user" =~ ^[A-Za-z0-9._%+-]+@rug\.nl$ ]] || die "init: --user must be your RUG address (name@rug.nl), got '${user:-nothing}'"
+  is_rug_address "$user" || die "init: --user must be your RUG address (name@rug.nl), got '${user:-nothing}'"
   [[ -n "$folder" ]] || folder=$LOCAL_DIR
   [[ "$folder" == "~"* ]] && folder="$HOME${folder#\~}"
   [[ -d "$folder" ]] || die "init: folder not found: $folder"
@@ -926,24 +962,24 @@ cmd_wizard() {   # guided setup: dependencies, address, folder, summary → conf
     gui_alert "Missing on this computer: ${missing[*]}."$'\n\n'"Install them first: paste this line into a terminal:"$'\n\n'"$hint"$'\n\n'"Then start the setup again." ok; exit 2
   fi
   if [[ -f "$CONF" ]]; then
-    gui_alert "A configuration already exists:"$'\n'"$CONF"$'\n\n'"Yes: start over and replace it."$'\n'"No: keep it and stop." yesno || exit 0
+    gui_alert "A configuration already exists:"$'\n'"$CONF"$'\n\n'"Yes: start over and replace it."$'\n'"No: keep it and stop." yesno || { gui_failed; exit 0; }
   fi
-  gui_alert "This sets up an automatic backup of one folder to your RUG research storage (RDMS)."$'\n\n'"It runs by itself at 3, 11, 15 and 19 h, keeps earlier versions of changed files for 90 days, checks after every run that everything arrived, and tells you when something is wrong."$'\n\n'"You will be asked for your RUG address, the folder, and your password (typed into a window; stored only on this computer)." okcancel || exit 0
+  gui_alert "This sets up an automatic backup of one folder to your RUG research storage (RDMS)."$'\n\n'"It runs by itself at 3, 11, 15 and 19 h, keeps earlier versions of changed files for 90 days, checks after every run that everything arrived, and tells you when something is wrong."$'\n\n'"You will be asked for your RUG address, the folder, and your password (typed into a window; stored only on this computer)." okcancel || { gui_failed; exit 0; }
   user="@rug.nl"
   while :; do
-    user=$(gui_ask "Your RUG address (name@rug.nl):" "$user") || exit 0; user=${user//[[:space:]]/}
-    [[ "$user" =~ ^[A-Za-z0-9._%+-]+@rug\.nl$ ]] && break
-    gui_alert "'$user' does not look like a RUG address (expected name@rug.nl)." ok || exit 0
+    user=$(gui_ask "Your RUG address (name@rug.nl):" "$user") || { gui_failed; exit 0; }; user=${user//[[:space:]]/}
+    is_rug_address "$user" && break
+    gui_alert "'$user' does not look like a RUG address (expected name@rug.nl)." ok || { gui_failed; exit 0; }
   done
   while :; do
-    folder=$(gui_folder "Choose the folder to back up (your Documents folder is a good choice)" "$LOCAL_DIR") || exit 0
+    folder=$(gui_folder "Choose the folder to back up (your Documents folder is a good choice)" "$LOCAL_DIR") || { gui_failed; exit 0; }
     if croot=$(cloud_root_of "$folder"); then
-      gui_alert "$folder"$'\n\n'"lies inside a cloud-synced location ($croot). Files that exist only in the cloud would be downloaded by every run, and files already in the cloud gain little from a second copy."$'\n\n'"Yes: use it anyway."$'\n'"No: pick another folder." yesno || continue
+      gui_alert "$folder"$'\n\n'"lies inside a cloud-synced location ($croot). Files that exist only in the cloud would be downloaded by every run, and files already in the cloud gain little from a second copy."$'\n\n'"Yes: use it anyway."$'\n'"No: pick another folder." yesno || { gui_failed; continue; }
     fi
     break
   done
   rpath="$(machine_label)_Backup/$(basename "$folder")"; rpath=${rpath// /_}
-  gui_alert "Folder:   $folder"$'\n'"Account:  $user"$'\n'"On the server:  $rpath"$'\n'"Runs at:  3, 11, 15, 19 h"$'\n\n'"Continue? Next comes your password." okcancel || exit 0
+  gui_alert "Folder:   $folder"$'\n'"Account:  $user"$'\n'"On the server:  $rpath"$'\n'"Runs at:  3, 11, 15, 19 h"$'\n\n'"Continue? Next comes your password." okcancel || { gui_failed; exit 0; }
   cmd_init --user "$user" --folder "$folder" --remote-path "$rpath" --force --quiet || { gui_alert "Could not write the configuration ($CONF). See the terminal window for details." ok; exit 2; }
   BACKUP_CONF="$CONF" exec "$BASH" "$SCRIPT_PATH" wizard-finish   # re-read the new config
 }
@@ -953,8 +989,13 @@ cmd_wizard_finish() {   # second phase of the wizard, with the new config loaded
     tries=$((tries+1))
     if [[ "$OS" == windows ]]; then setup_windows 1 >/dev/null; else setup_mac 1 >/dev/null; fi || exit 2
     conn_test && break
-    (( tries < 3 )) || { gui_alert "Three attempts failed:"$'\n\n'"$CONN_ERR"$'\n\n'"Check your address in $CONF and your password, then start the setup again." ok; exit 2; }
-    gui_alert "Could not connect with that password:"$'\n\n'"$CONN_ERR"$'\n\n'"Try again?" okcancel || exit 2
+    (( tries < 3 )) || { gui_alert "Three attempts as $WEBDAV_USER failed:"$'\n\n'"$CONN_ERR"$'\n\n'"Details: $STATE_DIR/setup.log. Check the address and your password, then start the setup again." ok; exit 2; }
+    if gui_alert "Could not connect as $WEBDAV_USER:"$'\n\n'"$CONN_ERR"$'\n\n'"Yes: try the password again."$'\n'"No: correct the address." yesno; then continue; fi
+    gui_failed
+    local u; u=$(gui_ask "Your RUG address (name@rug.nl):" "$WEBDAV_USER") || { gui_failed; exit 2; }; u=${u//[[:space:]]/}
+    is_rug_address "$u" || { gui_alert "'$u' does not look like a RUG address (expected name@rug.nl). Start the setup again." ok; exit 2; }
+    conf_set_user "$u"
+    BACKUP_CONF="$CONF" exec "$BASH" "$SCRIPT_PATH" wizard-finish
   done
   cmd_install >/dev/null || { gui_alert "The password works, but installing the schedule failed. Run 'backup.sh install' in a terminal to see why." ok; exit 2; }
   scheduler_kick
@@ -975,11 +1016,16 @@ cmd_setup() {   # setup [--gui]: store the password (typed by a person), then te
   exit 1
 }
 CONN_ERR=""
-conn_test() {   # list the remote root with the stored password; CONN_ERR holds rclone's last lines on failure
-  local err; err=$(mktemp); CONN_ERR=""
-  if setup_rclone 2>"$err" && tmo 90 rclone --config "$RCLONE_CONF" lsf --max-depth 1 "$REMOTE_ROOT" >/dev/null 2>"$err"; then rm -f "$err"; return 0; fi
-  CONN_ERR=$(tail -n 8 "$err" 2>/dev/null); rm -f "$err"; [[ -n "$CONN_ERR" ]] || CONN_ERR="no password stored, or rclone gave no message ($KEYCHAIN_HINT)"
-  return 1
+conn_test() {   # list the remote root with the stored password; CONN_ERR = rclone's last lines on failure, also kept in STATE_DIR/setup.log
+  local err attempt; err=$(mktemp); CONN_ERR=""
+  for attempt in 1 2; do
+    if setup_rclone 2>"$err" && tmo 90 rclone --config "$RCLONE_CONF" lsf --max-depth 1 "$REMOTE_ROOT" >/dev/null 2>"$err"; then rm -f "$err"; return 0; fi
+    CONN_ERR=$(tail -n 8 "$err" 2>/dev/null); [[ -n "$CONN_ERR" ]] || CONN_ERR="no password stored, or rclone gave no message ($KEYCHAIN_HINT)"
+    { echo "$(ts)  connection test as $WEBDAV_USER failed (attempt $attempt):"; echo "   ${CONN_ERR//$'\n'/$'\n'   }"; } >> "$STATE_DIR/setup.log" 2>/dev/null
+    [[ "$CONN_ERR" == *"401"* || "$CONN_ERR" == *"Unauthorized"* || "$CONN_ERR" == *"no password stored"* ]] && break   # wrong password: no point retrying
+    sleep 5   # anything else may be the server's slow first answer
+  done
+  rm -f "$err"; return 1
 }
 setup_windows() {   # setup_windows <gui 0/1>
   require powershell.exe rclone

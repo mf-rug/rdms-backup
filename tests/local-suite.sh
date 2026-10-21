@@ -212,6 +212,7 @@ printf 'STATE_DIR="%s"\nLOG_DIR="%s"\nNOTIFY=false\n' "$T/init-state" "$T/init-l
 out=$(BACKUP_CONF="$ic" bash "$SCRIPT" status 2>&1); check "generated config loads (status shows the remote)" grep -q '_Backup/src_dir' <<<"$out"
 out=$(BACKUP_CONF="$ic" bash "$SCRIPT" init --user "test.user@rug.nl" --folder "$SRC" 2>&1); check "init refuses to overwrite" grep -q 'config exists' <<<"$out"
 out=$(BACKUP_CONF="$T/none.conf" bash "$SCRIPT" init --user "someone@gmail.com" --folder "$SRC" 2>&1); check "init rejects a non-RUG address" grep -q 'RUG address' <<<"$out"
+out=$(BACKUP_CONF="$T/none.conf" bash "$SCRIPT" init --user "name.@rug.nl" --folder "$SRC" 2>&1); check "init rejects a dot right before the @" grep -q 'RUG address' <<<"$out"
 out=$(BACKUP_CONF="$ic" bash "$SCRIPT" setup --password x 2>&1); check "setup refuses --password" grep -q 'never takes a password' <<<"$out"
 out=$(RUGBACKUP_PASSWORD=x BACKUP_CONF="$ic" bash "$SCRIPT" setup 2>&1); check "setup refuses a password in the environment" grep -q 'never passed through the environment' <<<"$out"
 out=$(BACKUP_CONF="$T/none.conf" bash "$SCRIPT" status 2>&1); check "no config: status says how to create one" grep -q 'Setup.command' <<<"$out"
