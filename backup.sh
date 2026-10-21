@@ -998,6 +998,7 @@ cmd_wizard_finish() {   # second phase of the wizard, with the new config loaded
     BACKUP_CONF="$CONF" exec "$BASH" "$SCRIPT_PATH" wizard-finish
   done
   cmd_install >/dev/null || { gui_alert "The password works, but installing the schedule failed. Run 'backup.sh install' in a terminal to see why." ok; exit 2; }
+  state_init; state_set last_attempt_epoch 0 last_full_success_epoch 0   # a replaced config starts over: the kicked tick runs a full pass now
   scheduler_kick
   gui_alert "Done. The first backup has started in the background; with many files it takes hours, and later runs are quick."$'\n\n'"From now on it runs by itself. You hear from it when something is wrong, and once a day at 3 am that all is well."$'\n\n'"In a terminal, 'backup.sh status' shows its health." ok
 }
