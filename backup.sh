@@ -7,12 +7,13 @@
 #   backup.sh check                       full verification only (nothing is uploaded)
 #   backup.sh status                      health summary + recent runs
 #   backup.sh log [N]                     digest of the latest (or N-th latest) run
-#   backup.sh wizard                      guided setup with a few dialogs (what Setup.command / Setup.cmd run)
+#   backup.sh wizard [--dialogs]          guided setup in a window (what Setup.command / Setup.cmd run); --dialogs: plain dialogs
 #   backup.sh init --user a@rug.nl [--folder DIR]… [--remote-path P] [--hours "3 11 15 19"] [--name N] [--force]
 #                                         write backup.conf without any prompt (scripts, or a Claude doing the setup);
 #                                         several --folder: one backup under their common parent. init --add --folder DIR extends it
-#   backup.sh setup [--gui]               store the WebDAV password (keychain / DPAPI file), test the connection;
+#   backup.sh setup [--gui|--test-only]   store the WebDAV password (keychain / DPAPI file), test the connection;
 #                                         --gui, or no terminal: the password is typed into a dialog, never passed in
+#   backup.sh plan | cloud-check | info | first-run   what the setup window calls (JSON out); see gui/
 #   backup.sh install | uninstall         create / remove the launchd agent
 #   backup.sh pause | resume              stop / restart scheduled runs (agent stays loaded)
 #   backup.sh retire-old [--yes]          unload the old duck agents + cron line, moving them into old/
@@ -93,7 +94,7 @@ if [[ "$OS" == windows ]]; then BASH_BIN="$(cygpath -m /usr/bin/bash.exe)"
 elif [[ "$BASH" == /* && -x "$BASH" ]]; then BASH_BIN="$BASH"       # the bash (>= 4) running this script: Homebrew's, /opt/homebrew (Apple Silicon) or /usr/local (Intel)
 elif [[ -x /usr/local/bin/bash ]]; then BASH_BIN="/usr/local/bin/bash"; else BASH_BIN="/opt/homebrew/bin/bash"; fi
 
-case "${1:-}" in ""|init|wizard|help|--help|-h) CONF_OPTIONAL=1 ;; *) CONF_OPTIONAL=0 ;; esac
+case "${1:-}" in ""|init|wizard|plan|cloud-check|info|help|--help|-h) CONF_OPTIONAL=1 ;; *) CONF_OPTIONAL=0 ;; esac
 if [[ -f "$CONF" ]]; then
   # shellcheck disable=SC1090
   source "$CONF"
@@ -161,7 +162,7 @@ require() {
     die "missing dependency: $c ($hint)"
   done
 }
-usage()   { sed -n '2,27p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'; }
+usage()   { sed -n '2,28p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'; }
 
 # ----------------------------------------------------------------------------- OS layer: dates, small tools, PowerShell
 if [[ "$OS" == windows ]]; then
@@ -1080,8 +1081,9 @@ wizard_pick_folders() {   # wizard_pick_folders <prompt> <must-be-inside or ""> 
   done
 }
 WIZ_FOLDERS=()
-cmd_wizard() {   # guided setup: dependencies, address, folders, summary → config → (second phase) password, test, install, first run
+cmd_wizard() {   # guided setup: the setup window (gui/), or the dialog sequence below as fallback / with --dialogs
   [[ "$OS" == mac && -n "${SSH_CONNECTION:-}" ]] && die "the wizard needs the Mac's own screen: double-click Setup.command on the Mac, or: backup.sh gui-run --wait wizard"
+  if [[ "${1:-}" != --dialogs ]]; then local ec; wizard_window; ec=$?; (( ec == 99 )) || exit "$ec"; fi
   local -a missing=() fa=(); local c hint user f
   for c in rclone jq; do have "$c" || missing+=("$c"); done; find_python || missing+=(python3)
   if (( ${#missing[@]} )); then
@@ -1115,8 +1117,7 @@ wizard_add_folders() {   # add folders (inside LOCAL_DIR) to a several-folder se
   wizard_pick_folders "Choose a folder to add (inside $LOCAL_DIR)" "$LOCAL_DIR"
   for f in "${WIZ_FOLDERS[@]}"; do fa+=(--folder "$f"); done
   cmd_init --add --quiet "${fa[@]}" || { gui_alert "Could not update the folder list. See the terminal window for details." ok; exit 2; }
-  state_init; state_set last_attempt_epoch 0 last_full_success_epoch 0
-  scheduler_loaded && scheduler_kick
+  scheduler_loaded && cmd_first_run >/dev/null
   gui_alert "Added:"$'\n'"$(printf '  %s\n' "${WIZ_FOLDERS[@]}")"$'\n'"A full pass starts now in the background to pick them up." ok
 }
 cmd_wizard_finish() {   # second phase of the wizard, with the new config loaded
@@ -1134,17 +1135,73 @@ cmd_wizard_finish() {   # second phase of the wizard, with the new config loaded
     BACKUP_CONF="$CONF" exec "$BASH" "$SCRIPT_PATH" wizard-finish
   done
   cmd_install >/dev/null || { gui_alert "The password works, but installing the schedule failed. Run 'backup.sh install' in a terminal to see why." ok; exit 2; }
-  state_init; state_set last_attempt_epoch 0 last_full_success_epoch 0   # a replaced config starts over: the kicked tick runs a full pass now
-  scheduler_kick
+  cmd_first_run >/dev/null   # a replaced config starts over: the kicked tick runs a full pass now
   gui_alert "Done. The first backup has started in the background; with many files it takes hours, and later runs are quick."$'\n\n'"From now on it runs by itself. You hear from it when something is wrong, and once a day at 3 am that all is well."$'\n\n'"In a terminal, 'backup.sh status' shows its health." ok
 }
 
-cmd_setup() {   # setup [--gui]: store the password (typed by a person), then test the connection
-  local gui=0 v
-  while (( $# )); do case "$1" in --gui) gui=1 ;; --password|--password=*|-p) die "setup never takes a password on the command line; it is typed into the prompt or the dialog" ;; *) die "setup: unknown option '$1'" ;; esac; shift; done
+# ----------------------------------------------------------------------------- what the setup windows call (gui/wizard-mac.swift, gui/wizard-win.ps1)
+cmd_cloud_check() {   # cloud-check DIR → prints the cloud-sync root and exits 0 when DIR lies inside one; exit 1 otherwise
+  local d; d=$(canon_dir "${1:-.}") || exit 2
+  cloud_root_of "$d"
+}
+cmd_plan() {   # plan [--folder DIR]… → JSON: what init would write for these folders (parent, rules, server path, name, cloud warnings)
+  local -a folders=(); while (( $# )); do case "$1" in --folder) folders+=("${2:-}"); shift 2 ;; *) die "plan: unknown option '$1'" ;; esac; done
+  (( ${#folders[@]} )) || folders=("$LOCAL_DIR")
+  require jq; plan_folders "${folders[@]}"
+  local f croot cloud=""
+  for f in "${PLAN_FOLDERS[@]}"; do croot=$(cloud_root_of "$f") && cloud+="$f"$'\t'"$croot"$'\n'; done
+  jq -n --arg local "$PLAN_LOCAL" --arg remote "$PLAN_RPATH" --arg name "${PLAN_NAME:-$(basename "$PLAN_LOCAL") backup}" \
+    --arg rules "$(printf '%s\n' "${PLAN_RULES[@]}")" --arg cloud "$cloud" --args \
+    '{local_dir: $local, remote_path: $remote, name: $name, folders: $ARGS.positional,
+      rules: ($rules | split("\n") | map(select(length > 0))),
+      cloud: ($cloud | split("\n") | map(select(length > 0) | split("\t") | {folder: .[0], root: .[1]}))}' -- "${PLAN_FOLDERS[@]}"
+}
+cmd_info() {   # info → JSON with the effective settings a setup window needs (never a secret)
+  local -a missing=(); local c sl=0 ex=0 sev=0
+  for c in rclone jq; do have "$c" || missing+=("$c"); done; find_python || missing+=(python3)
+  [[ -f "$CONF" ]] && ex=1; [[ -n "$FILTER_FILE" && -f "$FILTER_FILE" ]] && sev=1
+  (( ex )) && scheduler_loaded && sl=1
+  if ! have jq; then printf '{"os":"%s","missing":["jq"],"config_exists":%s}\n' "$OS" "$ex"; return 0; fi
+  jq -n --arg os "$OS" --arg conf "$(wpath "$CONF")" --argjson exists "$ex" --arg local "$LOCAL_DIR" --arg remote "$REMOTE" \
+    --arg user "$WEBDAV_USER" --arg service "$KEYCHAIN_SERVICE" --arg cred "$CRED_FILE" --arg state "$STATE_DIR" --arg logs "$LOG_DIR" \
+    --arg label "$LAUNCHD_LABEL" --arg name "$BACKUP_NAME" --arg hours "$(slot_hours)" --argjson several "$sev" --arg filter "$FILTER_FILE" \
+    --arg missing "${missing[*]}" --argjson scheduler "$sl" --arg home "$(wpath "$HOME")" --arg docs "$LOCAL_DIR" \
+    '{os: $os, config: $conf, config_exists: ($exists == 1), local_dir: $local, remote: $remote, user: $user,
+      keychain_service: $service, cred_file: $cred, state_dir: $state, log_dir: $logs, label: $label, name: $name,
+      hours: ($hours | split(" ") | map(select(length > 0) | tonumber)), several_folders: ($several == 1), filter_file: $filter,
+      scheduler_installed: ($scheduler == 1), missing: ($missing | split(" ") | map(select(length > 0))), home: $home}'
+}
+cmd_first_run() {   # first-run → start over and let the hourly job run a full pass now; prints the log to follow
+  scheduler_loaded || die "the schedule is not installed yet (backup.sh install)"
+  state_init; state_set last_attempt_epoch 0 last_full_success_epoch 0
+  scheduler_kick
+  echo "started: the first full pass runs in the background; follow it with: backup.sh status   (log: $LOG_DIR/latest/run.log)"
+}
+# ----------------------------------------------------------------------------- the setup window (one per OS); the dialog wizard is the fallback
+wizard_window() {   # returns the window's exit code, or 99 when no window can be used here
+  local src bin cache hash
+  if [[ "$OS" == mac ]]; then
+    src="$SCRIPT_DIR/gui/wizard-mac.swift"; [[ -f "$src" ]] && have swiftc || return 99
+    cache="$HOME/Library/Caches/rdms-backup"; hash=$(shasum -a 256 "$src" | cut -c1-16); bin="$cache/wizard-mac-$hash"
+    if [[ ! -x "$bin" ]]; then
+      mkdir -p "$cache"; echo "building the setup window (first time only, about 20 s) …"
+      if ! swiftc -O -swift-version 5 -o "$bin" "$src" 2>"$cache/build.log"; then echo "could not build the setup window (see $cache/build.log); using dialogs instead" >&2; return 99; fi
+      find "$cache" -maxdepth 1 -name 'wizard-mac-*' ! -name "$(basename "$bin")" -delete 2>/dev/null
+    fi
+    RDMS_BACKUP_SH="$SCRIPT_PATH" RDMS_BASH="$BASH" BACKUP_CONF="$CONF" "$bin"; return $?
+  else
+    src="$SCRIPT_DIR/gui/wizard-win.ps1"; [[ -f "$src" ]] || return 99
+    RDMS_BACKUP_SH="$(wpath "$SCRIPT_PATH")" RDMS_BASH="$BASH_BIN" BACKUP_CONF="$(wpath "$CONF")" \
+      powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File "$(cygpath -w "$src")"; return $?
+  fi
+}
+
+cmd_setup() {   # setup [--gui] [--test-only]: store the password (typed by a person), then test the connection
+  local gui=0 testonly=0 v
+  while (( $# )); do case "$1" in --gui) gui=1 ;; --test-only) testonly=1 ;; --password|--password=*|-p) die "setup never takes a password on the command line; it is typed into the prompt or the dialog" ;; *) die "setup: unknown option '$1'" ;; esac; shift; done
   for v in RUGBACKUP_PASSWORD WEBDAV_PASSWORD BACKUP_PASSWORD; do [[ -n "${!v:-}" ]] && die "setup ignores \$$v on purpose: the password is typed into the prompt or the dialog, never passed through the environment"; done
   [[ -t 0 ]] || gui=1
-  if [[ "$OS" == windows ]]; then setup_windows "$gui"; else setup_mac "$gui"; fi
+  if (( testonly )); then gui=0; elif [[ "$OS" == windows ]]; then setup_windows "$gui"; else setup_mac "$gui"; fi
   printf 'connection test: '
   if conn_test; then echo "OK ($REMOTE_ROOT)"; return 0; fi
   echo "FAILED — rclone said:"; echo "   ${CONN_ERR//$'\n'/$'\n'   }"
@@ -1557,7 +1614,11 @@ case "${1:-help}" in
   log)       shift; cmd_log "$@" ;;
   setup)     shift; cmd_setup "$@" ;;
   init)      shift; cmd_init "$@" ;;
-  wizard)    cmd_wizard ;;
+  wizard)    shift; cmd_wizard "$@" ;;
+  plan)      shift; cmd_plan "$@" ;;
+  cloud-check) shift; cmd_cloud_check "$@" ;;
+  info)      cmd_info ;;
+  first-run) cmd_first_run ;;
   wizard-finish) cmd_wizard_finish ;;
   install)   cmd_install ;;
   uninstall) cmd_uninstall ;;
