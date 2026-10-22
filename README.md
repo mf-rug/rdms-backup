@@ -67,9 +67,12 @@ in Git Bash; `bash backup.sh …` works too). The Windows-specific parts:
 Three ways to the same result; pick one. All of them need the requirements above installed first.
 
 **1. Double-click, no terminal.** Open the repo folder and double-click `Setup.command` (macOS) or `Setup.cmd`
-(Windows). Five dialogs: what the tool does, your RUG address, the folder or folders, your password (typed into a dialog and
-stored only on this computer), a summary. It writes `backup.conf`, tests the connection, installs the schedule and
-starts the first backup in the background. The same thing from a terminal: `./backup.sh wizard`.
+(Windows). A setup window walks through the steps: what the tool does, your RUG address, the folder or folders, your
+password (typed into the window and stored only on this computer), a summary; then it tests the connection, installs
+the schedule and starts the first backup, showing progress as it goes. On the Mac the window is built once from
+`gui/wizard-mac.swift` with the Swift compiler that comes with Homebrew's command-line tools (about twenty seconds, first
+time only); on Windows it is `gui/wizard-win.ps1`. Without either, the same steps run as a sequence of plain dialogs
+(`./backup.sh wizard --dialogs`). From a terminal: `./backup.sh wizard`.
 
 **2. Let Claude do it.** In Claude Code, open the repo folder and say "set up my backup"; the repo's `CLAUDE.md`
 tells it the procedure. In the Claude desktop app, paste:
@@ -87,7 +90,7 @@ cannot will walk you through the same commands.
 git clone https://github.com/mf-rug/rdms-backup ~/rdms-backup && cd ~/rdms-backup     # anywhere you like
 ./backup.sh init --user you@rug.nl --folder ~/Documents   # writes backup.conf (or: cp backup.conf.example backup.conf and edit it)
                                                           # several folders: --folder ~/Documents --folder ~/Pictures (see below)
-./backup.sh setup            # stores the WebDAV password (keychain / DPAPI file), tests the connection; --gui = dialog instead of prompt
+./backup.sh setup            # stores the WebDAV password (keychain / DPAPI file), tests the connection; --gui = dialog, --test-only = test only
 ./backup.sh probe            # cheap end-to-end test: list, timing estimate, upload/verify/delete of 3 test files
 ./backup.sh run --dry-run --full   # what the first run WOULD upload — nothing is written
 ./backup.sh run --full       # first real run
@@ -118,7 +121,8 @@ Documents backup   /Users/you/Documents  →  rugdav:Mac_Backup/Documents
 | `versions <name or glob>` | earlier versions of a file kept in the versions folder, with the time each was replaced |
 | `orphans` | files on the server that no longer exist locally (or are excluded now), with sizes — pruning candidates |
 | `quota`, `probe`, `diag-keychain` | what the server says about quota; end-to-end test of server and local folder; why the password can't be read |
-| `wizard`, `init --user … [--folder …]…`, `init --add --folder …` | guided setup with dialogs; write `backup.conf` without prompts (scripts, Claude); add a folder to a several-folder setup |
+| `wizard [--dialogs]`, `init --user … [--folder …]…`, `init --add --folder …` | guided setup in a window (or dialogs); write `backup.conf` without prompts (scripts, Claude); add a folder to a several-folder setup |
+| `plan --folder …`, `cloud-check <dir>`, `info`, `first-run` | what the setup window calls: JSON preview of a config, cloud-location check, effective settings as JSON, start the first full pass through the scheduler |
 | `setup [--gui]`, `install`, `uninstall`, `pause`, `resume` | password (prompt or dialog) + connection test; scheduler; stop/continue scheduled runs |
 | `gui-run [--wait] <command…>` | run a command inside the GUI login session (needed over SSH: the keychain is locked there) |
 | `rclone <args…>` | rclone with the configured remote and credentials, e.g. `rclone lsd rugdav:` — for browsing and restores |

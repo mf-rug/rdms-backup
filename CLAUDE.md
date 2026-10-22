@@ -23,6 +23,7 @@ Run the commands from this folder (macOS: `./backup.sh …`; Windows Git Bash: `
    then `./backup.sh install` for the schedule, and `./backup.sh status` to show the result.
 
 Rules: never ask for, read, guess or pass the password in any form (argument, environment variable, file, prompt);
+never call `setup --test-only` as a substitute for `setup --gui`, it only tests what a person stored;
 the script refuses such attempts. Do not edit backup.sh or exclude.txt for a setup. backup.conf holds no secrets.
 Requirements, if `init` or `probe` complain: macOS `brew install rclone jq bash`; Windows Git for Windows plus
 `winget install Rclone.Rclone jqlang.jq Python.Python.3.12`.

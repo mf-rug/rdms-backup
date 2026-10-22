@@ -243,6 +243,18 @@ BACKUP_CONF="$mc" bash "$SCRIPT" run --full >/dev/null 2>&1
 check "full run picks up the added folder"   [ -f "$T/multi-target/C/c.txt" ]
 out=$(BACKUP_CONF="$ic" bash "$SCRIPT" init --add --folder "$SRC/Papers" 2>&1); check "init --add refuses on a one-folder config" grep -q 'directly' <<<"$out"
 
+echo "== 14. what the setup window calls: info, plan, cloud-check, setup --test-only, first-run"
+jqok() { jq -e "$1" <<<"$2" >/dev/null 2>&1; }   # jqok <filter> <json>
+out=$(BACKUP_CONF="$T/none.conf" bash "$SCRIPT" info 2>&1); check "info without a config is JSON" jqok '.config_exists == false and (.missing|type) == "array"' "$out"
+out=$(bk info 2>&1); check "info with a config: fields" jqok '.config_exists == true and .several_folders == false and (.hours == [3]) and (.log_dir|length > 0)' "$out"
+out=$(BACKUP_CONF="$mc" bash "$SCRIPT" info 2>&1); check "info: several folders flagged" jqok '.several_folders == true' "$out"
+out=$(BACKUP_CONF="$T/none.conf" bash "$SCRIPT" plan --folder "$M/A" --folder "$M/B" 2>&1); check "plan returns parent, rules, name" jqok '(.rules|length) == 2 and .name == "A, B backup" and (.folders|length) == 2 and (.remote_path|test("_Backup/multi$"))' "$out"
+BACKUP_CONF="$T/none.conf" bash "$SCRIPT" cloud-check "$T/OneDrive - Test/docs" >/dev/null 2>&1; check "cloud-check: inside OneDrive exits 0" [ $? -eq 0 ]
+BACKUP_CONF="$T/none.conf" bash "$SCRIPT" cloud-check "$SRC" >/dev/null 2>&1; check "cloud-check: normal folder exits 1" [ $? -eq 1 ]
+out=$(bk setup --test-only 2>&1); check "setup --test-only against the local target: OK" grep -q 'connection test: OK' <<<"$out"
+out=$(BACKUP_CONF="$ic" bash "$SCRIPT" setup --test-only 2>&1); ec=$?; check "setup --test-only with no password stored: fails, exit 1" [ $ec -eq 1 ] && grep -q 'FAILED' <<<"$out"
+out=$(bk first-run 2>&1); check "first-run without a schedule refuses" grep -q 'not installed' <<<"$out"
+
 echo
 echo "passed $PASS, failed $FAIL"
 (( FAIL == 0 ))
