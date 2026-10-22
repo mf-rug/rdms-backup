@@ -106,3 +106,11 @@ Suggested structure: a `case "$(uname -s)" in Darwin) … ;; MINGW*|MSYS*) … ;
 * `gui-run` runs the command directly on Windows. `diag-keychain` reports on the DPAPI file and a decrypt test.
   `retire-old` refuses on Windows.
 * A slot hour removed by a DST change is skipped (GNU `date -d` rejects it; BSD `date` silently shifted it).
+* **Setup window** (added later): `backup.sh wizard` runs one native window per OS, `gui/wizard-mac.swift` (AppKit,
+  compiled once with the Swift toolchain of the command-line tools and cached) and `gui/wizard-win.ps1` (WinForms,
+  Windows PowerShell 5.1, ASCII-only source because a BOM-less .ps1 is read as ANSI). Both are thin: they call the
+  script's `info`, `cloud-check`, `plan`, `init`, `setup --test-only`, `install` and `first-run` and show the output;
+  the password is stored by the window itself (keychain via `security -i` on stdin; DPAPI with the same code as
+  `PS_CRED_WRITE`) and never passed to the script. On Windows, bash is started hidden with its output in temp files and
+  polled by a WinForms timer, so no console flashes and the form never blocks. The dialog sequence remains as the
+  fallback (`wizard --dialogs`).
