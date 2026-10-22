@@ -255,6 +255,15 @@ out=$(bk setup --test-only 2>&1); check "setup --test-only against the local tar
 out=$(BACKUP_CONF="$ic" bash "$SCRIPT" setup --test-only 2>&1); ec=$?; check "setup --test-only with no password stored: fails, exit 1" [ $ec -eq 1 ] && grep -q 'FAILED' <<<"$out"
 out=$(bk first-run 2>&1); check "first-run without a schedule refuses" grep -q 'not installed' <<<"$out"
 
+if [[ "$OS" == windows ]]; then
+  echo "== 15. Windows setup window (gui/wizard-win.ps1): parses, ASCII only (PowerShell 5.1 reads a BOM-less .ps1 as ANSI)"
+  # shellcheck disable=SC2016   # PowerShell code: $ is PowerShell's
+  out=$(WIZ="$(cygpath -w "$REPO/gui/wizard-win.ps1")" MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -Command \
+        '$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($env:WIZ, [ref]$null, [ref]$e); if ($e) { $e | ForEach-Object { "$($_.Extent.StartLineNumber): $($_.Message)" } } else { "parse OK" }' 2>&1 | tr -d '\r')
+  check "wizard-win.ps1 parses" grep -qx 'parse OK' <<<"$out"
+  check "wizard-win.ps1 is ASCII only" bash -c "! LC_ALL=C grep -q '[^[:print:][:space:]]' '$REPO/gui/wizard-win.ps1'"
+fi
+
 echo
 echo "passed $PASS, failed $FAIL"
 (( FAIL == 0 ))
